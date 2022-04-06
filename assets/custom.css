@@ -3,6 +3,10 @@
     src: url('Louis George Cafe.ttf');
 }
 
+* {
+    font-family: "LouisCafe";
+}
+
 body {
     font-family: "LouisCafe";
 }

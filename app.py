@@ -1,18 +1,14 @@
 import dash
 from dash import Dash, html, dcc, dash_table
-import dash_bio as dashbio
-from dash.dependencies import Input, Output
-import plotly.express as px
+from dash.dependencies import Input, Output, State
 import pandas as pd
 import dash_bootstrap_components as dbc
 import vcf
 import random
 import plotly.graph_objects as go
+import plotly.colors
+from PIL import ImageColor
 
-import dash_tabulator
-
-# 3rd party js to export as xlsx
-external_scripts = ['https://oss.sheetjs.com/sheetjs/xlsx.full.min.js']
 # bootstrap css
 external_stylesheets = ['https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css']
 
@@ -24,6 +20,17 @@ vcf_reader = vcf.Reader(filename=VCF)
 vcf_records = [record for record in vcf_reader]
 
 LOGO = "assets/logo.svg"
+
+LINE_COL="black"
+EXON_COL_SELECTED="#afd4da"
+EXON_COL="lightskyblue"
+INTRON_COL_SELECTED="#dac8af"
+INTRON_COL="coral"
+UTR_COL_SELECTED="#caafda"
+UTR_COL="plum"
+TEXT_COL="dimgray"
+PLOT_BG="#F6F6F6"
+UNSELECTED_MARKER_COL="white"
 
 # --------------------------------------
 # READ ANNOTATION DATA
@@ -73,15 +80,38 @@ annotation_data = pd.concat([annotation_data, intron_data])
 # --------------------------------------
 
 def relative_positon(pos):
-    prev_end = 0
+    prev_x = 0  ; prev_end = 0
     for i, r in annotation_data.iterrows():
+        if r["type"] == "intron": continue
         if pos >= r["start"] and pos <= r["end"]: # in exon
             relativepos = pos - r["start"]
             return r["x0"]+relativepos
         elif pos < r["start"]: # in intron
-            return round(prev_end + (r["x0"] - prev_end)/2)
-        prev_end=r["x1"]
-    return round(prev_end + (FLANK/INTRON_SCALE)/2)
+            break
+        prev_x=r["x1"] ; prev_end=r["end"]
+    return prev_x + (pos - prev_end)/INTRON_SCALE
+
+def get_group(pos):
+    if pos < min(annotation_data["start"]):
+        return("5' Flanking")
+    if pos > max(annotation_data["end"]):
+        return("3' Flanking")
+    for i, r in annotation_data.iterrows():
+        if pos >= r["start"] and pos <= r["end"]: # in exon
+            return r["id"]
+
+def fake_rsid():
+    return "rs"+ str(round(random.random()*1e6))
+
+VARIANT_INS="INS"
+VARIANT_DEL="DEL"
+VARIANT_SNP="SNP"
+VARIANT_ETC="ETC"
+def get_variant_type(record):
+    if record.is_snp: return VARIANT_SNP
+    elif record.is_deletion: return VARIANT_DEL
+    elif record.is_indel: return VARIANT_INS
+    return VARIANT_ETC    
 
 variant_dict = {
     "id": [i for i in range(len(vcf_records))],
@@ -89,9 +119,14 @@ variant_dict = {
     "POS": [v.POS for v in vcf_records],
     "REF": [v.REF for v in vcf_records],
     "ALT": [v.POS for v in vcf_records],
-    "TYPE": [round(random.random()) for v  in vcf_records],
     "x": [relative_positon(v.POS) for v in vcf_records],
-    "y": [1 for v in vcf_records]
+    "y": [1 for v in vcf_records],
+    "rsid": [fake_rsid() for v in vcf_records],
+    "type": [get_variant_type(v) for v in vcf_records],
+    "af": [random.random()/2 for v in vcf_records],
+    "called": [v.num_called for v in vcf_records],
+    "nsamp": [len(v.samples) for v in vcf_records],
+    "group":[get_group(v.POS) for v in vcf_records]
     }
 variant_data = pd.DataFrame(data=variant_dict)
 
@@ -100,135 +135,29 @@ variant_data = pd.DataFrame(data=variant_dict)
 # --------------------------------------
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-
-@app.callback(
-    Output('cftr-plot-container', 'children'),
-    Input('flip-cftr-plot-view', 'n_clicks')
-)
-def make_cftr_plot(n_clicks):
-    
-    LINE_COL="slateblue"
-    EXON_COL="lightsteelblue"
-    UTR_COL="sandybrown"
-    UTR_LINE_COL="firebrick"
-    TEXT_COL="dimgray"
-    
-    if n_clicks % 2 == 1:
-        EXCLUDE_EXON_LABEL=["exon6", "exon17", "exon19", "exon26"]
-        df = annotation_data[annotation_data["type"] == "exon"]
-        fig = px.scatter(variant_data, x="POS", y="y")
-
-        fig.add_shape(
-                type="line",
-                x0=min(df["start"]), y0=-0.5, x1=max(df["end"]), y1=-0.5,
-                line=dict(color=LINE_COL, width=4)
-                )
-        for i, r in df.iterrows():
-            fig.add_shape(type="rect",
-               xref="x", yref="y",
-               x0=r["start"], y0=-1, x1=r["end"], y1=0,
-               line=dict( color=LINE_COL, width=1 ),
-               fillcolor=EXON_COL 
-               )
-            if r["id"] not in EXCLUDE_EXON_LABEL:
-                fig.add_annotation(
-                        x=(r["start"]+r["end"])/2, y=-1.5,
-                        text=r["id"],
-                        showarrow=False,
-                        textangle=-90,
-                        font=dict(
-                            family="Courier New, monospace",
-                            size=12,
-                            color=TEXT_COL
-                            )
-                        )
-        
-        fig.update_xaxes(range=[CFTR_START-FLANK, CFTR_END+FLANK])
-        fig.update_yaxes(range=[-2, 4])
-    
-    else:
-        ROTATE_LABEL={"exon14", "3’ UTR"}
-        EXCLUDE_EXON_LABEL=["exon16"]
-
-        df = annotation_data
-        vdf = variant_data ; vdf["y"] = vdf["y"]*random.random()*4
-        fig = px.scatter(vdf, x="x", y="y")
-
-        for x in set(variant_data["x"]):
-            fig.add_shape(
-                type="line",
-                x0=x, y0=-0.5, x1=x, y1=3,
-                line=dict(color=TEXT_COL, width=1)
-                )
- 
-        fig.add_shape(
-                type="line",
-                x0=min(df["x0"]), y0=-0.5, x1=max(df["x1"]), y1=-0.5,
-                line=dict(color=LINE_COL, width=4)
-                )
-        
-        for i, r in df.iterrows():
-
-            col = UTR_COL if r["type"] == "UTR" else EXON_COL
-            linecol = UTR_LINE_COL if r["type"] == "UTR" else LINE_COL
-
-            fig.add_shape(type="rect",
-               xref="x", yref="y",
-               x0=r["x0"], y0=-1,
-               x1=r["x1"], y1=0,
-               line=dict( color=linecol, width=1 ),
-               fillcolor=col
-               )
-            if r["id"] not in EXCLUDE_EXON_LABEL:
-                fig.add_annotation(
-                        x=(r["x0"]+r["x1"])/2, y=-0.5,
-                        text=r["id"],
-                        showarrow=False,
-                        textangle=0 if r["id"] in ROTATE_LABEL else -90,
-                        font=dict(
-                            family="Courier New, monospace",
-                            size=12,
-                            color=TEXT_COL
-                            )
-                        )
-    
-        fig.update_xaxes(range=[0, max(df["x1"])+FLANK/INTRON_SCALE])
-        fig.update_yaxes(range=[-1.5, 4])
-        fig.update_xaxes(visible=False)
-
-    fig.update_layout(plot_bgcolor="#F6F6F6", paper_bgcolor="LightSteelBlue",
-            margin={"l": 0, "r": 0, "t": 0, "b": 0})
-    fig.update_xaxes(fixedrange=True, automargin=False)
-    fig.update_yaxes( fixedrange=True, visible=False, automargin=True)
-
-    
-    plot = dcc.Graph(figure=fig, id="cftr-plot")
-    return plot
+app.title = "CFTbaRcodes"
 
 HEADER = html.Div(children=[
     html.Img(src=LOGO, id="logo-image"),
     html.Div(children="A web application for understanding CFTR haplotypes.")
     ])
 
-PLOT_BUTTON = dbc.Button('Switch View', id='flip-cftr-plot-view', n_clicks=0)
-PLOT = html.Div([
-    dcc.Loading(id='cftr-plot-container')
-    ])
+def get_empty_div(id, text="Nothing to show", height="400px"):
+    return html.Div(text, id=id,
+             style={"display": "flex",
+                    "align-items": "center",
+                    "justify-content":"center",
+                    "color": TEXT_COL, 
+                    "background":PLOT_BG,
+                    "height":height})
+def hide_mode():
+    return {'displaylogo': False, 'modeBarButtonsToRemove': ["select2d", "lasso2d", "toImage"]}
 
+# --------------------------------------
+# DRAW CFTR FIGURE
+# --------------------------------------
 
-CURVENUMBER_DICT=dict()
-FIGURE_OBJ=None
-@app.callback(
-    Output("cftr-mini-plot", "children"),
-    Input("flip-cftr-plot-view", "n_clicks")
-)
-def make_cftr_miniplot(n_clicks):
-    
-    LINE_COL="black"
-    EXON_COL="lightskyblue"
-    INTRON_COL="coral"
-    UTR_COL="plum"
-    TEXT_COL="dimgray"
+def make_cftr_plot():
     
     ROTATE_LABEL={"exon14", "3’ UTR"}
     EXCLUDE_EXON_LABEL=["exon16"]
@@ -249,7 +178,7 @@ def make_cftr_miniplot(n_clicks):
                     line_color=LINE_COL,
                     marker={"size": 0.1},
                     text=r["id"],
-                    customdata=[r["id"]]*5,
+                    customdata=[r["id"]],
                     hoverinfo = "text+x+y",
                     showlegend=False))
             if r["id"] not in EXCLUDE_EXON_LABEL:
@@ -274,7 +203,6 @@ def make_cftr_miniplot(n_clicks):
             hoveron = "fills", # select where hover is active
             line_color="black")
         )
-
 
     fig.data = fig.data[::-1]
 
@@ -301,176 +229,498 @@ def make_cftr_miniplot(n_clicks):
     newdict=dict()
     for i,x in enumerate(fig.data):
         newdict[i] = x
-
-    global CURVENUMBER_DICT
-    CURVENUMBER_DICT = newdict
-    global FIGURE_OBJ
-    FIGURE_OBJ = fig
     
     fig.update_xaxes(range=[0, max(df["x1"])+FLANK/INTRON_SCALE])
     fig.update_yaxes(range=[-0.1, 4])
-    fig.update_xaxes(visible=False)
 
-    fig.update_layout(plot_bgcolor="#F6F6F6", paper_bgcolor="LightSteelBlue",
+    fig.update_layout(plot_bgcolor=PLOT_BG,
             margin={"l": 0, "r": 0, "t": 0, "b": 0})
-    fig.update_xaxes(fixedrange=True)
+    fig.update_xaxes(fixedrange=True, visible=False)
     fig.update_yaxes(fixedrange=True, visible=False)
     
-    plot = dcc.Graph(figure=fig, id="cftr-plot", style={"height": "150px"})
-    return plot
+    return dcc.Graph(figure=fig, id="cftr-plot", style={"height": "150px"},
+                     config=hide_mode())
+
+def make_barcode_plot():
+        
+    fig = go.Figure()
+    x=[r["x"] for _, r in variant_data.iterrows()]
+    y=[0 for _, r in variant_data.iterrows()]
+    t=[r["rsid"] for _, r in variant_data.iterrows()]
+    fig.add_trace(go.Scatter(mode="markers", x=x, y=y, marker_symbol="line-ns",
+       marker_line_color=LINE_COL, marker_color=LINE_COL,
+       marker_line_width=0.1, marker_size=10, text=t, hoverinfo = "text",
+       showlegend=False))
+    
+    fig.update_xaxes(range=[0, max(annotation_data["x1"])+FLANK/INTRON_SCALE])
+    fig.update_yaxes(range=[-0.5, 0.5])
+    fig.update_layout(plot_bgcolor=PLOT_BG,
+            margin={"l": 0, "r": 0, "t": 0, "b": 0})
+    fig.update_xaxes(fixedrange=True, visible=False)
+    fig.update_yaxes(fixedrange=True, visible=False)
+    return dcc.Graph(figure=fig, id="barcode-plot", style={"height": "50px"},
+                      config=hide_mode())
 
 
-MINIPLOT = html.Div([
-    dcc.Loading(id="cftr-mini-plot")
-    ])
+CFTRPLOT = html.Div([ make_cftr_plot() ])
+BARCODEPLOT = html.Div([ make_barcode_plot() ])
 
+# --------------------------------------
+# CLICK RESPONSE FUNCTIONS
+# --------------------------------------
 
+# Show selected element
 @app.callback(
     Output("selection-text", "children"),
-    Input("cftr-plot", "hoverData"),
-    Input("cftr-plot", "clickData"))
-def update_selection_text(hoverData, clickData):
-    #print("click" , clickData)
-    #print("hover ", hoverData)
-
-    TEXT_COL="dimgray"
-
-    for i in range(len(FIGURE_OBJ.data)):
-        curveId = -1 if clickData is None else clickData["points"][0]["curveNumber"]
-
-        if i == curveId: 
-            FIGURE_OBJ.data[i].fillcolor=TEXT_COL
+    Input("cftr-plot", "clickData"),
+    Input("cftr-plot", "figure"))
+def update_selection_text(click_data, figure):
     
-    if clickData is not None:
-        curve = CURVENUMBER_DICT[clickData["points"][0]["curveNumber"]]
-        return html.P("click: " + curve["text"])
-    curve = CURVENUMBER_DICT[hoverData["points"][0]["curveNumber"]]
-    return html.P("hover: " + curve["text"])
+    if click_data is None: return html.Div("")
 
+    idx = click_data["points"][0]["curveNumber"]
+    trace = figure["data"][idx]
+    
+    text=trace["text"] ; color=UTR_COL
+    if "exon" in text:
+        text="all exons"; color=EXON_COL
+    elif "intron" in text:
+        color=INTRON_COL
+    
+    return html.Div(style={"display": "flex", "align-items": "center"}, 
+                    children=[html.Div("Selected: "),
+                              html.Div(text,
+                                       style={"background": color,
+                                              "padding": "4px",
+                                              "border-radius": "4px",
+                                              "border": "2px solid "+LINE_COL,
+                                              "color": TEXT_COL,
+                                              "font-family": "Courier New, monospace"
+                                              })])
 
-LABEL = html.Div([
-    html.Pre(id="selection-text")
-    ])
-
+# Change outline for selected element(s) in the gene box
 @app.callback(
-    Output('tbl_out', 'children'), 
-    Input('tbl', 'active_cell'))
-def update_graphs(active_cell):
-    return str(active_cell) if active_cell else "Click the table"
+    Output("cftr-plot", "figure"),
+    Input("cftr-plot", "clickData"),
+    Input("cftr-plot", "figure"))
+def update_cftr_plot_selection(click_data, figure):
+    
+    if click_data is None: return figure
 
-@app.callback(
-    Output("tbl", "style_data_conditional"),
-    Input("tbl", "derived_viewport_selected_row_ids"),
-)
-def style_selected_rows(selRows):
-    if selRows is None:
-        return dash.no_update
-    return [
-        {"if": 
-         {"filter_query": "{{id}} ={}".format(i)},
-         "backgroundColor": "#fff5be",
-         }
-        for i in selRows
+    idx = click_data["points"][0]["curveNumber"]
+    trace = figure["data"][idx]
+    
+    for i in range(len(figure["data"])):
+        if "customdata" in figure["data"][i]:
+            w=0.1
+
+            clickId=trace["text"]
+            if figure["data"][i]["customdata"][0] == clickId or \
+                ("exon" in clickId and "exon" in figure["data"][i]["customdata"][0]):
+                    w=1.5
+                
+            if "line" in figure["data"][i]:
+                figure["data"][i]["line"]["width"] = w
+            if "marker" in figure["data"][i]:
+                if "line" not in figure["data"][i]["marker"]:
+                    figure["data"][i]["marker"]["line"] = dict()
+                figure["data"][i]["marker"]["line"]["width"] = w
+                
+    return figure
+
+# --------------------------------------
+# VARIANT TABLE
+# --------------------------------------
+
+TABLE_COLUMNS = [
+    { "id": "rsid", "name": "rsid" },
+    { "id": "CHROM", "name": "chrom" },
+    { "id": "POS", "name": "pos" },
+    { "id": "REF", "name": "ref" },
+    { "id": "ALT", "name": "alt" },
+    { "id": "type", "name": "type"},
+    { "id": "af", "name": "allele freq"},
+    { "id": "group", "name": "location"}
     ]
+
+# Update table with variants from selected elements
+@app.callback(
+    Output("variant-table-container", "children"),
+    Input("cftr-plot", "clickData"),
+    Input("cftr-plot", "figure"),
+    Input("selected-variants", "data"))
+def update_table_target(click_data, figure, selected_data):
+    
+    if selected_data is None: selected_data = {"selected":[]}
+    selected_ids = selected_data["selected"]
+        
+    empty_div = get_empty_div("variant-table", text="No variants to display", height="500px")
+    
+    if click_data is None: return empty_div
+
+    idx = click_data["points"][0]["curveNumber"]
+    trace = figure["data"][idx]
+    target_group=trace["text"]
+    
+    if "exon" in target_group:
+        vdf = variant_data[variant_data["group"].str.contains("exon")]
+    else:
+        vdf = variant_data[variant_data["group"] == target_group]
+    
+    if len(vdf) == 0 : return empty_div
+    
+    # convert "id" to row index
+    i = 0 ; selected_rows = []
+    for _, r in vdf.iterrows():
+        if r["id"] in selected_ids : selected_rows.append(i)
+        i+=1
+
+    variant_table = dash_table.DataTable(
+        data=vdf.to_dict("records"),
+        id="variant-table",
+        columns=TABLE_COLUMNS,
+        row_selectable='multi',
+        selected_rows=selected_rows,
+        page_size=50,
+        fixed_rows={'headers': True},
+        style_table={'height': 400}
+        )
+    
+    condition = []
+    for i in selected_ids:
+        condition.append({"if": {"filter_query": "{{id}} ={}".format(i)},
+                          "backgroundColor": "#fff5be" })
+        
+    variant_table.style_data_conditional = condition
+
+    return variant_table
+
 
 TABLE = dbc.Container([
-    dbc.Label('Click a cell in the table:'),
-    dash_table.DataTable(
-        data=variant_data.to_dict('records'),
-        columns=[{"name": c, "id": c} for c in variant_data.columns],
-        id='tbl', 
-        row_selectable='multi',
-        page_size=10,
-        fixed_rows={'headers': True},
-        style_table={'height': 300}  # default is 500
-    ),
-    dbc.Alert(id='tbl_out'),
-])
+    html.Div(id="variant-table-container",
+             children=[get_empty_div("variant-table", 
+                                     text="No variants to display", 
+                                     height="500px")])], 
+    style={"width": "48vw"})
 
-downloadButtonType = {"css": "btn btn-primary", "text":"Export", "type":"xlsx"}
-clearFilterButtonType = {"css": "btn btn-outline-dark", "text":"Clear Filters"}
 
-# Setup some columns 
-# This is the same as if you were using tabulator directly in js 
-# Notice the column with "editor": "input" - these cells can be edited
-# See tabulator editor for options http://tabulator.info/docs/4.8/edit
-columns = [
-    { "title": "CHROM", "field": "chrom"},
-    { "title": "POS", "field": "pos", "headerFilter":True, "hozAlign": "center" },
-    { "title": "REF", "field": "ref",  },
-    { "title": "ALT", "field": "alt", "hozAlign": "center" },
-    ]
+# --------------------------------------
+# COMPONENT PLOT
+# --------------------------------------
 
-# Setup some data
-data = []
-for i, r in variant_data.iterrows():
-    item={"id":i, "chrom": r["CHROM"], "pos": r["POS"],
-          "ref": r["REF"], "alt": r["ALT"]}
-    data.append(item)
+@app.callback(
+    Output("component-plot-container", "children"),
+    Input("cftr-plot", "clickData"),
+    Input("cftr-plot", "figure"))
+def make_cftr_component_plot(click_data, figure):
     
-    if len(data) > 100: break
+    COLLAPSE_PC=0.025
+    empty_div = get_empty_div("component-plot", text="No variants to display", height="400px")
+    
+    if click_data is None: return empty_div
 
-TABULAR=html.Div([
-    dash_tabulator.DashTabulator(
-        id='tabulator',
-        theme='tabulator_simple',  #optional
-        columns=columns,
-        data=data,
-        options = { "selectable":"true", "pagination":"true", "paginationSize":5,
-                   "paginationSizeSelector":"[10, 25, 50, 100, true]", "height":"300px"},
-        downloadButtonType=downloadButtonType,
-        clearFilterButtonType=clearFilterButtonType
-    ),
-    html.Div(id='output'),
-    dcc.Interval(
-                id='interval-component-iu',
-                interval=1*10, # in milliseconds
-                n_intervals=0,
-                max_intervals=0
-            )
+    idx = click_data["points"][0]["curveNumber"]
+    trace = figure["data"][idx]
+    target_group=trace["text"]
+    
+    if "exon" in target_group:
+        vdf = variant_data[variant_data["group"].str.contains("exon")]
+    else:
+        vdf = variant_data[variant_data["group"] == target_group]
 
-])
+    if len(vdf) == 0 : return empty_div
 
-@app.callback([ Output('tabulator', 'columns'), 
-                Output('tabulator', 'data')],
-                [Input('interval-component-iu', 'n_intervals')]) 
-def initialize(val):
-    return columns, data
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[min(annotation_data["start"]), max(annotation_data["end"])],
+            y=[0.15, 0.15],
+            fill='toself', fillcolor="black",
+            marker={"size": 0.1},
+            showlegend=False,
+            hoveron = "fills",
+            line_color="black")
+        )
 
-@app.callback(Output('output', 'children'), 
-    [Input('tabulator', 'rowClicked'),
-    Input('tabulator', 'cellEdited'),
-    Input('tabulator', 'dataChanged'), 
-    Input('tabulator', 'dataFiltering'),
-    Input('tabulator', 'dataFiltered')])
-def display_output(row, cell, dataChanged, filters, dataFiltered):
-    print(row)
-    print(cell)
-    print(dataChanged)
-    print(filters)
-    print(dataFiltered)
-    return 'You have clicked row {} ; cell {}'.format(row, cell)
+    for i, r in annotation_data.iterrows():
+        if not "intron" in r["type"]:
+            col = UTR_COL if r["type"] == "UTR" else EXON_COL
+            #adding an extra marker to assist in hover detection
+            fig.add_trace(go.Scatter(mode="markers", x=[(r["start"]+ r["end"])/2],
+                                     y=[0.15], marker_symbol="line-ns",
+                                     marker_line_color=col, marker_color=col,
+                                     marker_line_width=1, text=r["id"], 
+                                     hoverinfo = "text", showlegend=False))
+
+            fig.add_trace(go.Scatter(
+                    x=[r["start"], r["start"], r["end"], r["end"], r["start"]],
+                    y=[0.1, 0.2, 0.2, 0.1, 0.1],
+                    fill='toself',
+                    hoveron = 'fills',
+                    line = dict(width=1),
+                    line_color=col,
+                    fillcolor=col,
+                    marker={"size": 0.1},
+                    text=r["id"],
+                    customdata=[r["id"]],
+                    hoverinfo = "text+x+y",
+                    showlegend=False))
+
+    #fig.update_layout(hovermode="x")
+    collapse_range=(max(vdf["POS"])-min(vdf["POS"]))*COLLAPSE_PC
+    collapse=[] ; collapse_pos = -collapse_range*2 ; c = 0
+    for i, r in vdf.iterrows():
+        if r["POS"] - collapse_pos > collapse_range:
+            collapse_pos = r["POS"]
+            c+=1
+        collapse.append(c)
+        
+    vdf["collapse"] = collapse
+    x = [r["POS"] for i, r in vdf.iterrows()]
+    y = [0.3 for i, r in vdf.iterrows()]
+    t = [r["rsid"] for i, r in vdf.iterrows()]
+    fig.add_trace(go.Scatter(mode="markers", x=x, y=y, marker_symbol="line-ns",
+                   marker_line_color="black", marker_color="black",
+                   marker_line_width=1, marker_size=10, text=t, hoverinfo = "text",
+                   showlegend=False))
+
+    shapedict = {VARIANT_DEL: "diamond", VARIANT_INS: "diamond",
+                 VARIANT_SNP: "circle", VARIANT_ETC: "circle"}
+    colorscaledict = {VARIANT_DEL: "oranges", VARIANT_INS: "oranges",
+                 VARIANT_SNP: "blues", VARIANT_ETC: "blues"}
+
+    for i in set(vdf["collapse"]):
+        col = LINE_COL  
+        y=0.4
+        for j, r in vdf[vdf["collapse"] == i].iterrows():
+            
+            shape = shapedict[r["type"]]
+            colorscale = colorscaledict[r["type"]]
+
+            fig.add_trace(go.Scatter(
+                mode="markers", x=[r["POS"]], y=[y], marker_symbol=shape,
+                marker_line_color=LINE_COL, marker_color=get_color(colorscale, r["af"]),
+                marker_line_width=0.5, marker_size=8, customdata=[r["id"]],
+                showlegend=False, text=[r["rsid"]], hoverinfo = "text"))
+            y+=0.05
+
+    
+    xmin = min(annotation_data[annotation_data["id"] == target_group]["start"])
+    xmax = min(annotation_data[annotation_data["id"] == target_group]["end"])
+    if "exon" in target_group:
+        xmin=min(annotation_data["start"])
+        xmax=max(annotation_data["end"])
+    fig.update_yaxes(range=[0, 2])
+    fig.update_xaxes(range=[xmin-(xmax-xmin)*0.05, xmax+(xmax-xmin)*0.05 ])
+
+    fig.update_layout(plot_bgcolor="#F6F6F6",
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+            height=400)
+    fig.update_xaxes(fixedrange=True, title_text="GRCh38 Coordinate")
+    fig.update_yaxes(fixedrange=True, visible=False)
+    return dcc.Graph(figure=fig, id="component-plot")
+
+
+COMPONENT_PLOT = dbc.Container([
+        html.Pre(id="selection-text"),
+        html.Div(id="component-plot-container")
+        ],style={"width": "48vw"})
+
+@app.callback(
+    Output("component-plot", "figure"),
+    Input("selected-variants", "data"),
+    State("component-plot", "figure"))
+def update_component_selection(selected_data, figure):
+
+    if figure is None: return dash.no_update
+
+    if selected_data is None: selected_data = {"selected":[]}
+    selected = selected_data["selected"]
+
+    for curve in figure["data"]:
+        if "marker" in curve and "customdata" in curve:
+            id=curve["customdata"][0]
+            if not "line" in curve["marker"]:
+                curve["marker"]["line"]=dict()
+            curve["marker"]["line"]["width"] = 2 if id in selected else 0.1
+
+    return figure
+
+# --------------------------------------
+# VARIANT SELECTION
+# --------------------------------------
+        
+@app.callback(
+    Output("variant-table-selection-container", "children"),
+    Input("selected-variants", "data"))
+def add_selected_variant(selected_data):
+    
+    empty_div = get_empty_div("variant-table-selection", text="No variants selected", height="400px")
+    if selected_data is None: selected_data = {"selected":[]}
+    selected_ids = selected_data["selected"]
+
+    if selected_ids is None or len(selected_ids) == 0: return empty_div
+    vdf = variant_data[variant_data["id"].isin(selected_ids)]
+    
+    selection_table = dash_table.DataTable(
+        data=vdf.to_dict("records"),
+        id="variant-table-selection",
+        columns=TABLE_COLUMNS,
+        editable=True,
+        row_deletable=True,
+        page_size=50,
+        fixed_rows={'headers': True},
+        style_table={'height': 400})
+
+    return selection_table
+
+TABLE_SELECTION = dbc.Container(
+    id="variant-table-selection-container",
+    children=[ get_empty_div("variant-table-selection", 
+                             text="No variants selected", 
+                             height="400px")])
+
+@app.callback(
+    Output("selected-variants", "data"),
+    Input("variant-table", "selected_row_ids"),
+    Input("variant-table", "data"),
+    Input("variant-table-selection", "data"),
+    Input("component-plot", "clickData"),
+    State("selected-variants", "data"))
+def variant_row_change(selected_ids, table_data, selection_table_data, 
+                       variant_plot_click, store_data):
+        
+    store_data = store_data or {"selected": []}
+    selected = [id for id in store_data["selected"]]
+    to_rm = set()
+
+    ctx = dash.callback_context
+
+    # handle variant clicked on component plot
+    if ctx.triggered and "component-plot" in ctx.triggered[0]["prop_id"]:
+        if variant_plot_click is not None:
+            for clicked in variant_plot_click["points"]:
+                if "customdata" in clicked:
+                    clicked_id = clicked["customdata"]
+                    if clicked_id in selected and len(variant_plot_click["points"])==1:
+                        selected.remove(clicked_id)
+                    else:
+                        selected.append(clicked_id)
+        store_data["selected"] = selected
+        return store_data
+
+                        
+    
+    # handle variant removed from selection table
+    if selection_table_data is not None:
+        table_ids = [x["id"] for x in selection_table_data]
+        for id in selected:
+            if id not in table_ids: to_rm.add(id)
+
+    # handle variant [un]selected from variant table
+    if selected_ids is not None and table_data is not None:
+        table_ids = [x["id"] for x in table_data]
+        selected = store_data["selected"] + selected_ids
+        selected = list(set(selected))
+        for id in selected:
+            if id in table_ids and id not in selected_ids:
+                to_rm.add(id)
+
+
+    for id in to_rm: 
+        selected.remove(id)
+
+    if store_data["selected"] == selected:
+        return dash.no_update
+
+    print("selected: ", selected)
+    store_data["selected"] = selected
+    return store_data
+
+
+# --------------------------------------
+# APP LAYOUT
+# --------------------------------------
+
+
+cardstyle={"box-shadow": "0 4px 8px 0 rgba(0,0,0,0.2)"}   
 
 app.layout = html.Div(style={"padding": 20}, children=[
+    dcc.Store(id="selected-variants", storage_type="memory"),
     HEADER,
     html.Hr(),
-    dbc.Card([
-                dbc.CardHeader([ html.H5("CFTR Plot") ]),
-                dbc.CardBody([ MINIPLOT , PLOT_BUTTON ])
-                ], style={"box-shadow": "0 4px 8px 0 rgba(0,0,0,0.2)"},
-        id="plot-card"),   
-    html.Hr(),
-    LABEL,
     dbc.Card(
-            id="table-card",
-            children=[
-                    dbc.CardHeader([ html.H5("CFTR Variants") ]),
-                    dbc.CardBody([ TABLE ])],
-                    className="w-75"
-                    ),
-    
+        children = [ dbc.CardHeader([ html.H5("CFTR Plot") ]),
+                    dbc.CardBody([ BARCODEPLOT, CFTRPLOT ])],
+        style=cardstyle,
+        id="cftr-card"),   
+    html.Br(),
+    dbc.Card(
+        children=[dbc.CardHeader([ html.H5("CFTR Variants") ]),
+                  dbc.CardBody(html.Div(style={"display": "flex", "align-content":"stretch"},
+                                        children=[ TABLE, COMPONENT_PLOT ]))],
+        style=cardstyle,
+        id="variant-card"),   
+    html.Br(),
+    dbc.Card(
+        children=[dbc.CardHeader([ html.H5("Selected Variants") ]),
+                  dbc.CardBody(children=[ TABLE_SELECTION ])],
+        style=cardstyle,
+        id="selected-card"),
     ])
 
+
+
+
+
+# Interpolating from a plotly color scale
+
+def get_color(colorscale_name, loc):
+    from _plotly_utils.basevalidators import ColorscaleValidator
+    # first parameter: Name of the property being validated
+    # second parameter: a string, doesn't really matter in our use case
+    cv = ColorscaleValidator("colorscale", "")
+    # colorscale will be a list of lists: [[loc1, "rgb1"], [loc2, "rgb2"], ...] 
+    colorscale = cv.validate_coerce(colorscale_name)
+    
+    if hasattr(loc, "__iter__"):
+        return [get_continuous_color(colorscale, x) for x in loc]
+    return get_continuous_color(colorscale, loc)
+        
+
+def get_continuous_color(colorscale, intermed):
+
+    if len(colorscale) < 1:
+        raise ValueError("colorscale must have at least one color")
+
+    hex_to_rgb = lambda c: "rgb" + str(ImageColor.getcolor(c, "RGB"))
+
+    if intermed <= 0 or len(colorscale) == 1:
+        c = colorscale[0][1]
+        return c if c[0] != "#" else hex_to_rgb(c)
+    if intermed >= 1:
+        c = colorscale[-1][1]
+        return c if c[0] != "#" else hex_to_rgb(c)
+
+    for cutoff, color in colorscale:
+        if intermed > cutoff:
+            low_cutoff, low_color = cutoff, color
+        else:
+            high_cutoff, high_color = cutoff, color
+            break
+
+    if (low_color[0] == "#") or (high_color[0] == "#"):
+        # some color scale names (such as cividis) returns:
+        # [[loc1, "hex1"], [loc2, "hex2"], ...]
+        low_color = hex_to_rgb(low_color)
+        high_color = hex_to_rgb(high_color)
+
+    return plotly.colors.find_intermediate_color(
+        lowcolor=low_color,
+        highcolor=high_color,
+        intermed=((intermed - low_cutoff) / (high_cutoff - low_cutoff)),
+        colortype="rgb",
+    )
 
 if __name__ == '__main__':
     app.run_server(debug=True)

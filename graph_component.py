@@ -3,15 +3,30 @@ from plotly import graph_objs as go
 import vcf
 import textile_plot as textile
 import numpy as np
-import pandas as pd
 import cvxpy as cp
 import random
 from pairing import pair
-import scipy.cluster.hierarchy as sch
-import matplotlib.pyplot as plt
+import json
+from dash.dependencies import Input, Output, State
+from cryptography.fernet import Fernet
+
+KEY = Fernet.generate_key()
+def encrypt(message):
+    return Fernet(KEY).encrypt(message)
+def decrypt(token):
+    return Fernet(KEY).decrypt(token)
+
+def get_haps(figure):
+    for data in figure["data"]:
+        if data["customdata"][0] == "haplotype":
+            hap_token=data["customdata"][1]
+            string = decrypt(hap_token.encode()).decode();
+            haps = string.split(",")
+            haps = [h.split(" ") for h in haps]
+            return haps
 
 EDGE_COLOR="rgba(0,0,0,0.5)"
-EDGE_COLOR_HIGHLIGHT="rgba(255,0,0,0.95)"
+EDGE_COLOR_HIGHLIGHT="rgba(255,0,0,0.7)"
 EDGE_SCALE_FACTOR=10
 
 MISSING_TO_REF=True
@@ -22,26 +37,34 @@ VARIANT_ETC="ETC"
 SYMBOL=["♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","⛎"]
 EMPTY_SYMBOL="◻️"
 
+def json_Node(j):
+    serialized = json.loads(j)
+    node = Node(None, serialized["gt"], serialized["seq"])
+    node.x = serialized["x"] ; node.y = serialized["y"]
+    node.shape = serialized["shape"] ; node.color = serialized["color"]
+    return node
+
 class Node:
     def __init__(self, variant, gt, seq):
         self.variant = variant
         self.gt = gt
-        self.bin = id
         self.seq = seq
         self.x = None
         self.y = None
-        self.dy = None
         self.shape = "circle" ; self.color = "blue"
         if variant.get_class() == VARIANT_INDEL:
             self.shape = "diamond" ; self.color = "orange"
 
     def coords(self):
         return (self.x, self.y)
-    def dcoords(self):
-        return (self.x, self.dy)
     def id(self):
         return( pair(self.variant.id, self.gt) )
-
+    def to_json(self):
+        serialized = dict(gt=self.gt, seq=self.seq,
+                         x=self.x, y=self.y,
+                         shape=self.shape, color=self.color)
+        return json.dumps(serialized)
+    
 class Variant:
     def __init__(self, id, record):
         self.record = record
@@ -57,10 +80,9 @@ class Variant:
                 none_value = 0 if MISSING_TO_REF else None
                 self.gt = [ none_value if a is None else int(a) for a in self.gt ]
 
-    def set_coordinates(self, y, dy):
+    def set_coordinates(self, y):
         for gt in y:
             self.alleles[gt].y = y[gt]
-            self.alleles[gt].dy = dy[gt]
             self.alleles[gt].x = self.id
     def get_sample(self, i):
         return self.alleles[self.gt[i]]
@@ -68,6 +90,12 @@ class Variant:
         if self.record.is_snp: return VARIANT_SNP
         if self.record.is_indel: return VARIANT_INDEL
         return VARIANT_ETC
+
+    def to_json(self):
+        serialized = dict(gt=self.gt, seq=self.seq,
+                         x=self.x, y=self.y,
+                         shape=self.shape, color=self.color)
+        return json.dumps(serialized)
     
 class Edge:
     def __init__(self, node1, node2, nsamp):
@@ -92,10 +120,9 @@ class Edge:
         y= [self.node1.coords()[1], self.node2.coords()[1]]
         if pad: y.append(None)
         return y
-    def get_dy(self, pad=False):
-        dy= [self.node1.dcoords()[1], self.node2.dcoords()[1]]
-        if pad: dy.append(None)
-        return dy
+    
+    def gts(self):
+        return ((self.node1.gt, self.node2.gt))
 
     def id(self):
         return( pair(self.node1.id(), self.node2.id()) )
@@ -111,88 +138,10 @@ class Haplotype:
         return [edge.id() for edge in self.hap]
     def nodes(self):
         return [self.hap[0].node1] + [edge.node2 for edge in self.hap]
-
-
-def define_haps(vcf_records=None, missing_to_ref=True):
     
-    if vcf_records is None or len(vcf_records) < 1:        
-        VCF="cftr.vcf.gz"
-        vcf_reader = vcf.Reader(filename=VCF)
-        vcf_records = [record for record in vcf_reader]
-        selected=[5,17]
-        
-    # Create variant objects
-    variants = [] ; nodes = []
-    for i,record in enumerate(vcf_records):
-        variant = Variant(i, record)
-        variants.append(variant)
-        for node in variant.alleles:
-            nodes.append(node)
-            
-    # Calculate textile heights
-    height_dict = textile.genotype_textile(vcf_records, plot=False, haplotype=True, set_missing_to_ref=MISSING_TO_REF)
-    #height_dict = optimize_spread(height_dict, 15)
-    height_dict_spread = optimize_spread(height_dict)
-
-    for i,variant in enumerate(variants):
-        variant.set_coordinates( height_dict[i], height_dict_spread[i] )        
+    def stringify(self):
+        return " ".join([str(node.gt) for node in self.nodes()])
     
-    nodes = [node for node in nodes if node.y is not None]       
-    
-    # Create haplotype objects
-    nsamp = len(variants[0].gt) ; nvar = len(variants)
-    haplotypes=[] ; edge_dict = dict() ; edges = []
-    for i in range(nsamp):
-        haplotype = Haplotype(i)
-
-        for j in range(nvar-1):
-            allele_from = variants[j].get_sample(i)
-            allele_to = variants[j+1].get_sample(i)
-            edge_key = (allele_from, allele_to)
-            if edge_key in edge_dict:
-                edge = edge_dict[edge_key]
-                edge.observed()
-            else:
-                edge = Edge(allele_from, allele_to, nsamp)
-                edge_dict[edge_key] = edge
-                edges.append(edge)
-        
-            haplotype.add(edge)
-        haplotypes.append(haplotype)
-    
-    
-    groups = dict()
-    for i,haplotype in enumerate(haplotypes):
-        hap_nodes = haplotype.nodes()
-        group = tuple(hap_nodes[s].gt for s in selected)
-        if not group in groups: groups[group] = []
-        groups[group].append(i)
-    
-    def fake_rsid():
-        return "rs"+ str(round(random.random()*1e6))
-    rsids= [ fake_rsid() for s in selected ]
-        
-    total = sum([len(groups[g]) for g in groups])
-    rows = []
-    for group in groups:
-        size = len(groups[group])
-        r = {"freq" : str(round(size*100/total, 2)) + "%" }
-        for i,gt in enumerate(group): r[SYMBOL[i]] = gt
-        rows.append(r)
-    
-    
-    tooltip = { SYMBOL[i]: {"value": rsid, "use_with": "both"} for i,rsid in enumerate(rsids) }
-    
-    return dash_table.DataTable(rows, id="haplotype-table", 
-                                row_selectable="single",
-                                tooltip=tooltip,
-                                tooltip_delay=0)
-
-
-
-
-
-
 # optimization problem to spread out nodes
 def optimize_spread(y, height_fraction=10):    
     def spread(points, min_distance, max_left, max_right):
@@ -248,11 +197,10 @@ def plot_graph(vcf_records=None):
     
     # Calculate textile heights
     height_dict = textile.genotype_textile(vcf_records, plot=False, haplotype=True, set_missing_to_ref=MISSING_TO_REF)
-    #height_dict = optimize_spread(height_dict, 15)
-    height_dict_spread = optimize_spread(height_dict)
+    height_dict = optimize_spread(height_dict, 12)
 
     for i,variant in enumerate(variants):
-        variant.set_coordinates( height_dict[i], height_dict_spread[i] )        
+        variant.set_coordinates( height_dict[i] )        
     
     nodes = [node for node in nodes if node.y is not None]       
     
@@ -276,13 +224,19 @@ def plot_graph(vcf_records=None):
         
             haplotype.add(edge)
         haplotypes.append(haplotype)
-
+        
+    string_haps = ",".join([hap.stringify() for hap in haplotypes])
     
-    #collapse_haps(haplotypes)
+    haplotype_trace =[
+        go.Scatter(
+            x=[], y=[], showlegend=False,
+            customdata=[ "haplotype", encrypt(string_haps.encode()).decode() ]
+            )
+        ]
+
     
     node_traces = get_node_traces(nodes)
     edge_traces = get_edge_traces(edges)
-    haplotype_traces = get_haplotype_traces(haplotypes)
     
     def fake_rsid():
         return "rs"+ str(round(random.random()*1e6))
@@ -299,12 +253,12 @@ def plot_graph(vcf_records=None):
             text=[EMPTY_SYMBOL for x,variant in enumerate(variants)],
             mode="text",
             hoverinfo="name",
-            showlegend=True,
-            customdata=[ "label", [], EMPTY_SYMBOL] 
+            showlegend=False,
+            customdata=[ "label" ] 
             )
         ]
     
-    fig = go.Figure(data=label_traces + edge_traces + node_traces,
+    fig = go.Figure(data=haplotype_trace + label_traces + edge_traces + node_traces,
              layout=go.Layout(
                 plot_bgcolor="#F6F6F6",
                 hovermode="x",
@@ -333,9 +287,9 @@ def get_node_traces(nodes):
     
     node_bins = dict();
     for node in nodes:
-        if node.bin not in node_bins:
-            node_bins[node.bin] = []
-        node_bins[node.bin].append(node)
+        if node.gt not in node_bins:
+            node_bins[node.gt] = []
+        node_bins[node.gt].append(node)
 
     node_traces = []
     for i in node_bins:
@@ -348,14 +302,12 @@ def get_node_traces(nodes):
                     mode="markers+text",
                     hoverinfo="text",
                     textfont_color="white",
-                    showlegend=True,
+                    showlegend=False,
                     marker=dict(
                         color=[node.color for node in node_bins[i]],
                         symbol=[node.shape for node in node_bins[i]],
                         size=20, line=dict(color="#888888", width=2)),
-                    customdata=[ "node", 
-                                [node.y for node in node_bins[i]],
-                                [node.dy for node in node_bins[i]]]
+                    customdata=[ "node", [node.gt for node in node_bins[i]] ] 
                     )
                 )
     return node_traces
@@ -385,9 +337,7 @@ def get_edge_traces(edges):
                     line_color=EDGE_COLOR,
                     line=dict(width=bin_values[i]*EDGE_SCALE_FACTOR),
                     showlegend=False,
-                    customdata=[ "edge", 
-                                flatten([edge.get_y(pad=True) for edge in edge_bins[i]]),
-                                flatten([edge.get_dy(pad=True) for edge in edge_bins[i]])]
+                    customdata=[ "edge", [edge.gts() for edge in edge_bins[i]] ]
                     )
                 )
     return edge_traces
@@ -407,139 +357,131 @@ def get_haplotype_traces(haplotypes):
                     line=dict(width=EDGE_SCALE_FACTOR*1.2),
                     visible=False,
                     showlegend=False,
-                    customdata=[ "haplotype", 
-                                flatten([edge.get_y(pad=True) for edge in hap.hap]),
-                                flatten([edge.get_dy(pad=True) for edge in hap.hap]),
-                                i]
+                    customdata=[ "haplotype", i ]
                     )
                 )
     return haplotype_traces
-    
-CLIENTSIDE_UPDATE= \
-    """
-    function(hover_data, click_data, selected_ids, figure) {
-        SYMBOL="""+str(SYMBOL)+""";
 
-        console.log(figure);
-        var triggered = dash_clientside.callback_context.triggered;
-        if (triggered.length > 0 ){
+def unflatten(lst):
+    v = [] ; tmp = []
+    for item in lst:
+        if item is None: 
+            v.append(tuple(tmp)) ; tmp =[]
+        else: 
+            tmp.append(item)
+    if len(tmp) > 0: v.append(tuple(tmp))
+    return v
+    
+def draw_haplotype(figure, haplogroup):
+    
+    # remove existing traces
+    to_rm = []
+    for i,data in enumerate(figure["data"]):
+        if "customdata" in data and data["customdata"][0] == "haplogroup":
+            to_rm.append(i)
+    for i in sorted(to_rm, reverse=True):
+        del figure["data"][i]
+    
+    increment = 1/len(haplogroup)
+    edges = [(i, i+1) for i,_ in enumerate(haplogroup[0][:-1])]
+    edge_values = [dict() for _ in haplogroup[0][:-1]]
+    for haplotype in haplogroup:
+        for i,hi in enumerate(haplotype[:-1]):
+            value = (hi, haplotype[i+1])
+            if value not in edge_values[i]: 
+                edge_values[i][value] = 0
+                
+            edge_values[i][value] += increment
+
+    node_values = [dict() for _ in haplogroup[0]]
+    for haplotype in haplogroup:
+        for i,v in enumerate(haplotype):
+            if v not in node_values[i]: 
+                node_values[i][v] = 0
+                
+            node_values[i][v] += increment
+
+    # place new traces under node and over edges
+    placement = -1
+    for i,(d1,d2) in enumerate(zip(figure["data"][:-1], figure["data"][1:])):
+        if "customdata" in d1 and "customdata" in d2:
+            if d1["customdata"][0] == "edge" and d2["customdata"][0] == "node":
+                placement = i
+                break
         
-            // update edge color with selected_ids haplotype ------------------------
-            if(triggered[0]["prop_id"]=="haplotype-table.selected_row_ids"){
-    
-                var idx = selected_ids[0];
-    
-                for (let i = 0; i < figure["data"].length; i++) {
-                    if ("customdata" in figure["data"][i] && figure["data"][i]["customdata"][0] == "haplotype"){
-                        figure["data"][i]["visible"] = false;
-    
-                        if (idx == figure["data"][i]["customdata"][3]){
-                            figure["data"][i]["visible"] = true;
-                        }
-                    }
-                }
+    traces_to_add=[]
+    # add edges
+    for data in figure["data"]:
+        if "customdata" in data and data["customdata"][0] == "edge":
+
+            edge_xs = unflatten(data["x"])
+            edge_ys = unflatten(data["y"])
+            
+            for i,edge_x in enumerate(edge_xs):
+                match_idx = edges.index(edge_x)
                 
-                return { "data": figure["data"], "layout": figure["layout"] }
-            }
-            
-            
-            // handle click ------------------------
-            if(triggered[0]["prop_id"]=="graph-plot.clickData"){
-                console.log(click_data["points"]);
-
-                idx = click_data["points"][0]["x"];
-                for (let i = 0; i < figure["data"].length; i++) {
-                    data=figure["data"][i];
-                    if ("customdata" in data && data["customdata"][0] == "label"){
-                        
-                        if (idx in data["customdata"][1]){
-                            console.log('remove it');
-                        }
-                        else{
-                            data["customdata"][1].push(idx);
-                        }
-                        data["customdata"][1].sort(function(a, b){return a - b});
-
-                        new_text=[]; k=0;
-                        for (let j = 0; j < data["text"].length; j++) {
-                            new_text[j] = data["customdata"][2];
-                            if (j in data["customdata"][1]){
-                                new_text[j] = SYMBOL[k];
-                                k=k+1;
-                            }
-                        }
-                        data["text"] = new_text;
-                        return { "data": figure["data"], "layout": figure["layout"] }
-
-                    }
-                }
-
-            
-            
-            
-            }
-            
-            // hover on plot ------------------------
-            if(triggered[0]["prop_id"]=="graph-plot.hoverData"){
+                value = tuple(str(v) for v in data["customdata"][1][i])
                 
-                if (typeof hover_data == "undefined"){
-                    return figure;
-                } else{
-                    var idx = hover_data["points"][0]["x"]
-                }
-        
-                if ("hover_id" in figure["data"][0]){
-                    if (figure["data"][0]["hover_id"] == idx){
-                        return figure;
-                    }
-                }
-                figure["data"][0]["hover_id"] = idx;    
-                for (let i = 0; i < figure["data"].length; i++) {
-                    if ("customdata" in figure["data"][i]){
-                        var trace = figure["data"][i]["customdata"][0];
-                        
-                        if (trace == "node" || trace == "edge" || trace == "haplotype"){
+                if value in edge_values[match_idx]:
+                    proportion = edge_values[match_idx][value]
+                    trace = {"customdata": ["haplogroup"], 
+                             "hoverinfo": "none", 
+                             "line": {"color": EDGE_COLOR_HIGHLIGHT,
+                                      "width": proportion*EDGE_SCALE_FACTOR*1.2},
+                             "mode": "lines", 
+                             "showlegend": False, 
+                             "x": [x for x in edge_x], 
+                             "y": [y for y in edge_ys[i]],
+                             "type": "scatter"}
+                    
+                    traces_to_add.append(trace)
+                    
+    # add nodes
+    for data in figure["data"]:
+        if "customdata" in data and data["customdata"][0] == "node":
 
-                            var x = figure["data"][i]["x"];
-                            var init_y = figure["data"][i]["customdata"][1];
-                            var spread_y = figure["data"][i]["customdata"][2];
-                        
-                            var update_y = [];
-                            for (let j = 0; j < x.length; j++) {
-                                update_y[j] = init_y[j]
-                                if (x[j] == idx){
-                                    update_y[j] = spread_y[j];
-                                }
-                            }
-                            figure["data"][i]["y"] = update_y;
-                        }
-                    }
-                }
+            for i,x in enumerate(data["x"]):
+                value = str(data["customdata"][1][i])
                 
-                return { "data": figure["data"], "layout": figure["layout"] }
-            }
-        }
+                if value in node_values[x]:
+                    proportion = node_values[x][value]
+                    
+                    trace = {"customdata": ["haplogroup"], 
+                             "hoverinfo": "text", 
+                             "marker": {"color": EDGE_COLOR_HIGHLIGHT,
+                                        "symbol": "circle",
+                                        "size": 22 + 10*proportion},
+                             "text": str(round(proportion*100,1)) + "%",
+                             "showlegend": False, 
+                             "x": [x], 
+                             "y": [data["y"][i]],
+                             "type": "scatter"}
+                    
+                    traces_to_add.append(trace)
 
-        return figure
-    }
-    """
+    for trace in traces_to_add:
+        figure["data"].insert(placement, trace)
 
 
+    return figure
 
-
-
-
-
-
-
-'''
-def collapse_haps(vcf_records=None):
+def update_symbols(figure, symbols):
     
-    if vcf_records is None or len(vcf_records) < 2:        
+    for data in figure["data"]:
+        if data["customdata"][0] == "label":
+            data["text"] = symbols
+    return figure
+
+
+"""
+def define_haps(vcf_records=None, missing_to_ref=True):
+    
+    if vcf_records is None or len(vcf_records) < 1:        
         VCF="cftr.vcf.gz"
         vcf_reader = vcf.Reader(filename=VCF)
         vcf_records = [record for record in vcf_reader]
-    
+        selected=[5,17]
+        
     # Create variant objects
     variants = [] ; nodes = []
     for i,record in enumerate(vcf_records):
@@ -550,11 +492,10 @@ def collapse_haps(vcf_records=None):
             
     # Calculate textile heights
     height_dict = textile.genotype_textile(vcf_records, plot=False, haplotype=True, set_missing_to_ref=MISSING_TO_REF)
-    #height_dict = optimize_spread(height_dict, 15)
-    height_dict_spread = optimize_spread(height_dict)
+    height_dict = optimize_spread(height_dict, 15)
 
     for i,variant in enumerate(variants):
-        variant.set_coordinates( height_dict[i], height_dict_spread[i] )        
+        variant.set_coordinates( height_dict[i] )        
     
     nodes = [node for node in nodes if node.y is not None]       
     
@@ -579,61 +520,31 @@ def collapse_haps(vcf_records=None):
             haplotype.add(edge)
         haplotypes.append(haplotype)
     
-    import plotly.figure_factory as ff
-    np.random.seed(1)
+    groups = dict()
+    for i,haplotype in enumerate(haplotypes):
+        hap_nodes = haplotype.nodes()
+        group = tuple(hap_nodes[s].gt for s in selected)
+        if not group in groups: groups[group] = []
+        groups[group].append(i)
     
-    #haps = [haplotype.to_vector() for haplotype in haplotypes]
-    #X = np.matrix(haps)
-    
-    X = np.random.rand(15, 12)
-    fig = ff.create_dendrogram(X)
-    
-    return dcc.Graph(figure=fig, id="graph-dendogram")
-    #plot_bgcolor="#F6F6F6",
-    
-    
-    haps = [haplotype.to_vector() for haplotype in haplotypes]
-    X = np.matrix(haps)
-    dendrogram = sch.dendrogram(sch.linkage(X, method="ward"), p=15, truncate_mode="lastp")
-    plt.xlabel("Haplotypes") ; plt.ylabel("Euclidean distances")
-    plt.show()
-    
-    from sklearn.cluster import AgglomerativeClustering
-
-    cluster = AgglomerativeClustering(n_clusters=2, affinity='euclidean', linkage='ward')
-
-    def recusive_cluster(X, ids=None):
-
-        if X.shape[0] < 3: return None
-
-        if ids is None:
-            ids = [i for i in range(X.shape[0])]
+    def fake_rsid():
+        return "rs"+ str(round(random.random()*1e6))
+    rsids= [ fake_rsid() for s in selected ]
         
-        pred = cluster.fit_predict(X)
-        
-        idx0 = [i for i,p in enumerate(pred) if p==0]
-        ids0 = [ids[i] for i in idx0]
-        X0 = np.take(X, idx0, 0)
-        idx1 = [i for i,p in enumerate(pred) if p==1]
-        ids1 = [ids[i] for i in idx1]
-        X1 = np.take(X, idx1, 0)
+    total = sum([len(groups[g]) for g in groups])
+    rows = []
+    for group in groups:
+        size = len(groups[group])
+        r = {"freq" : str(round(size*100/total, 2)) + "%" }
+        for i,gt in enumerate(group): r[SYMBOL[i]] = gt
+        rows.append(r)
+    
+    
+    tooltip = { SYMBOL[i]: {"value": rsid, "use_with": "both"} for i,rsid in enumerate(rsids) }
+    
+    return dash_table.DataTable(rows, id="haplotype-table", 
+                                row_selectable="single",
+                                tooltip=tooltip,
+                                tooltip_delay=0)
 
-        res0 = recusive_cluster(X0, ids0)
-        res1 = recusive_cluster(X1, ids1)
-
-        if res0 is None or res
-        
-        return res0 + res1
-
-    recusive_cluster(X)
-
-    
-    
-    
-    
-    
-    cluster = AgglomerativeClustering(n_clusters=X.shape[0], affinity='euclidean', linkage='ward')
-    fit = cluster.fit(X)
-    
-    ward = ward_tree(X, return_distance=True)
-'''
+"""

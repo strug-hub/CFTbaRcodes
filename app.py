@@ -8,6 +8,7 @@ import random
 import plotly.graph_objects as go
 import plotly.colors
 from PIL import ImageColor
+import graph_component
 
 # bootstrap css
 external_stylesheets = ['https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css']
@@ -17,7 +18,8 @@ CFTR_VIEW="chr7:" + str(CFTR_START-FLANK) + "-" + str(CFTR_END+FLANK)
 
 VCF="quick_cftr_merge_chr7_117287120-117715971.vcf"
 vcf_reader = vcf.Reader(filename=VCF)
-vcf_records = [record for record in vcf_reader]
+vcf_records = [record for record in vcf_reader if record.num_called > 10]
+
 
 LOGO = "assets/logo.svg"
 
@@ -73,7 +75,7 @@ annotation_data["x0"] = x0
 annotation_data["x1"] = x1
 
 intron_data = pd.DataFrame(introns)
-annotation_data = pd.concat([annotation_data, intron_data])
+annotation_data = pd.concat([annotation_data, intron_data], sort=False)
 
 # --------------------------------------
 # READ VARIANT DATA
@@ -143,7 +145,7 @@ HEADER = html.Div(children=[
     ])
 
 def get_empty_div(id, text="Nothing to show", height="400px"):
-    return html.Div(text, id=id,
+    return html.Div([text], id=id,
              style={"display": "flex",
                     "align-items": "center",
                     "justify-content":"center",
@@ -343,6 +345,11 @@ TABLE_COLUMNS = [
     { "id": "group", "name": "location"}
     ]
 
+def empty_variant_table():
+    empty_div = get_empty_div("variant-table-empty", text="No variants to display", height="500px")
+    empty_div.children.append(dash_table.DataTable(id="variant-table"))
+    return empty_div
+
 # Update table with variants from selected elements
 @app.callback(
     Output("variant-table-container", "children"),
@@ -354,9 +361,7 @@ def update_table_target(click_data, figure, selected_data):
     if selected_data is None: selected_data = {"selected":[]}
     selected_ids = selected_data["selected"]
         
-    empty_div = get_empty_div("variant-table", text="No variants to display", height="500px")
-    
-    if click_data is None: return empty_div
+    if click_data is None: return empty_variant_table()
 
     idx = click_data["points"][0]["curveNumber"]
     trace = figure["data"][idx]
@@ -367,7 +372,7 @@ def update_table_target(click_data, figure, selected_data):
     else:
         vdf = variant_data[variant_data["group"] == target_group]
     
-    if len(vdf) == 0 : return empty_div
+    if len(vdf) == 0 : return empty_variant_table()
     
     # convert "id" to row index
     i = 0 ; selected_rows = []
@@ -398,15 +403,18 @@ def update_table_target(click_data, figure, selected_data):
 
 TABLE = dbc.Container([
     html.Div(id="variant-table-container",
-             children=[get_empty_div("variant-table", 
-                                     text="No variants to display", 
-                                     height="500px")])], 
+             children=[empty_variant_table()])], 
     style={"width": "48vw"})
 
 
 # --------------------------------------
 # COMPONENT PLOT
 # --------------------------------------
+
+def empty_component_plot():
+    empty_div = get_empty_div("component-plot-empty", text="No variants to display", height="400px")
+    empty_div.children.append(dcc.Graph(id="component-plot", style={"display": "none"}))
+    return empty_div
 
 @app.callback(
     Output("component-plot-container", "children"),
@@ -415,9 +423,8 @@ TABLE = dbc.Container([
 def make_cftr_component_plot(click_data, figure):
     
     COLLAPSE_PC=0.025
-    empty_div = get_empty_div("component-plot", text="No variants to display", height="400px")
-    
-    if click_data is None: return empty_div
+
+    if click_data is None: return empty_component_plot()
 
     idx = click_data["points"][0]["curveNumber"]
     trace = figure["data"][idx]
@@ -428,7 +435,7 @@ def make_cftr_component_plot(click_data, figure):
     else:
         vdf = variant_data[variant_data["group"] == target_group]
 
-    if len(vdf) == 0 : return empty_div
+    if len(vdf) == 0 : return empty_component_plot()
 
     fig = go.Figure()
     fig.add_trace(
@@ -523,8 +530,9 @@ def make_cftr_component_plot(click_data, figure):
 
 COMPONENT_PLOT = dbc.Container([
         html.Pre(id="selection-text"),
-        html.Div(id="component-plot-container")
-        ],style={"width": "48vw"})
+        html.Div(id="component-plot-container", 
+                 children=[empty_component_plot()])
+        ], style={"width": "48vw"})
 
 @app.callback(
     Output("component-plot", "figure"),
@@ -549,17 +557,20 @@ def update_component_selection(selected_data, figure):
 # --------------------------------------
 # VARIANT SELECTION
 # --------------------------------------
-        
+def empty_variant_table_selection():
+    empty_div = get_empty_div("variant-table-selection-empty", text="No variants to display", height="400px")
+    empty_div.children.append(dash_table.DataTable(id="variant-table-selection"))
+    return empty_div
+
 @app.callback(
     Output("variant-table-selection-container", "children"),
     Input("selected-variants", "data"))
 def add_selected_variant(selected_data):
     
-    empty_div = get_empty_div("variant-table-selection", text="No variants selected", height="400px")
     if selected_data is None: selected_data = {"selected":[]}
     selected_ids = selected_data["selected"]
 
-    if selected_ids is None or len(selected_ids) == 0: return empty_div
+    if selected_ids is None or len(selected_ids) == 0: return empty_variant_table_selection()
     vdf = variant_data[variant_data["id"].isin(selected_ids)]
     
     selection_table = dash_table.DataTable(
@@ -576,9 +587,7 @@ def add_selected_variant(selected_data):
 
 TABLE_SELECTION = dbc.Container(
     id="variant-table-selection-container",
-    children=[ get_empty_div("variant-table-selection", 
-                             text="No variants selected", 
-                             height="400px")])
+    children=[ empty_variant_table_selection() ])
 
 @app.callback(
     Output("selected-variants", "data"),
@@ -609,7 +618,6 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
         store_data["selected"] = selected
         return store_data
 
-                        
     
     # handle variant removed from selection table
     if selection_table_data is not None:
@@ -636,6 +644,26 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
     print("selected: ", selected)
     store_data["selected"] = selected
     return store_data
+
+
+
+# --------------------------------------
+# GRAPH PLOT
+# --------------------------------------
+    
+@app.callback(
+    Output("graph-plot-container", "children"), 
+    Input("selected-variants", "data"))
+def graph_replot(store_data):
+    records = [vcf_records[i] for i in store_data["selected"]]
+    plot = graph_component.plot_graph(records)
+    return [plot]
+
+GRAPH_PLOT = dbc.Container(
+        id="graph-plot-container",
+        children=[],
+        style={"width": "80vw"})
+
 
 
 # --------------------------------------
@@ -667,6 +695,13 @@ app.layout = html.Div(style={"padding": 20}, children=[
                   dbc.CardBody(children=[ TABLE_SELECTION ])],
         style=cardstyle,
         id="selected-card"),
+    html.Br(),
+    dbc.Card(
+        children=[dbc.CardHeader([ html.H5("Haplotype Graph") ]),
+                  dbc.CardBody(children=[ GRAPH_PLOT ])],
+        style=cardstyle,
+        id="graph-card"),
+
     ])
 
 
@@ -722,5 +757,59 @@ def get_continuous_color(colorscale, intermed):
         colortype="rgb",
     )
 
+CLIENTSIDE_UPDATE= \
+    """
+    function(hover_data, figure) {
+        var triggered = dash_clientside.callback_context.triggered;
+        // update edge color with selected_ids haplotype
+
+        
+        if (typeof hover_data == "undefined"){
+            return figure;
+        } else{
+            var idx = hover_data["points"][0]["x"]
+        }
+
+        if ("hover_id" in figure["data"][0]){
+            if (figure["data"][0]["hover_id"] == idx){
+                return figure;
+            }
+        }
+        figure["data"][0]["hover_id"] = idx;    
+        for (let i = 0; i < figure["data"].length; i++) {
+            if ("customdata" in figure["data"][i]){
+                var trace = figure["data"][i]["customdata"][0];
+                var x = figure["data"][i]["x"];
+                var init_y = figure["data"][i]["customdata"][1];
+                var spread_y = figure["data"][i]["customdata"][2];
+                
+                if (trace == "node" || trace == "edge" || trace == "haplotype"){
+                    var update_y = [];
+                    for (let j = 0; j < x.length; j++) {
+                        update_y[j] = init_y[j]
+                        if (x[j] == idx){
+                            update_y[j] = spread_y[j];
+                        }
+                    }
+                    figure["data"][i]["y"] = update_y;
+                }
+            }
+        }
+        
+        return {
+            "data": figure["data"],
+            "layout": figure["layout"],
+            "frames": [{ "duration": 0, redraw: false }]
+        }
+    }
+    """
+
+
+app.clientside_callback(
+    CLIENTSIDE_UPDATE,
+    Output("graph-plot", "figure"), 
+    Input("graph-plot", "hoverData"),
+    State("graph-plot", "figure")
+)
 if __name__ == '__main__':
     app.run_server(debug=True)

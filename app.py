@@ -10,6 +10,11 @@ import plotly.colors
 from PIL import ImageColor
 import graph_component
 
+SYMBOL=["🟥","🟧","🟨","🟩","🟦","🟪","🟫","⬛",
+        "❌","⭕","❗","❓",
+        "♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","⛎"]
+EMPTY_SYMBOL="◻️"
+
 # bootstrap css
 external_stylesheets = ['https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css']
 
@@ -33,7 +38,7 @@ UTR_COL="plum"
 TEXT_COL="dimgray"
 PLOT_BG="#F6F6F6"
 UNSELECTED_MARKER_COL="white"
-
+DEFAULT_IDX=2
 # --------------------------------------
 # READ ANNOTATION DATA
 # --------------------------------------
@@ -153,7 +158,8 @@ def get_empty_div(id, text="Nothing to show", height="400px"):
                     "background":PLOT_BG,
                     "height":height})
 def hide_mode():
-    return {'displaylogo': False, 'modeBarButtonsToRemove': ["select2d", "lasso2d", "toImage"]}
+    return {"displaylogo": False, "modeBarButtonsToRemove": ["select2d", "lasso2d", "toImage"]}
+
 
 # --------------------------------------
 # DRAW CFTR FIGURE
@@ -278,14 +284,16 @@ BARCODEPLOT = html.Div([ make_barcode_plot() ])
     Input("cftr-plot", "figure"))
 def update_selection_text(click_data, figure):
     
-    if click_data is None: return html.Div("")
-
-    idx = click_data["points"][0]["curveNumber"]
-    trace = figure["data"][idx]
-    
-    text=trace["text"] ; color=UTR_COL
-    if "exon" in text:
-        text="all exons"; color=EXON_COL
+    if click_data is not None:
+        idx = click_data["points"][0]["curveNumber"]
+        text=figure["data"][idx]["text"]
+    else:
+        text = "exon"
+        
+    color=UTR_COL
+    if "exon" in text: 
+        text="all exons"
+        color=EXON_COL
     elif "intron" in text:
         color=INTRON_COL
     
@@ -307,9 +315,11 @@ def update_selection_text(click_data, figure):
     Input("cftr-plot", "figure"))
 def update_cftr_plot_selection(click_data, figure):
     
-    if click_data is None: return figure
-
-    idx = click_data["points"][0]["curveNumber"]
+    if click_data is not None:
+        idx = click_data["points"][0]["curveNumber"]
+    else:
+        idx=DEFAULT_IDX
+    
     trace = figure["data"][idx]
     
     for i in range(len(figure["data"])):
@@ -327,7 +337,8 @@ def update_cftr_plot_selection(click_data, figure):
                 if "line" not in figure["data"][i]["marker"]:
                     figure["data"][i]["marker"]["line"] = dict()
                 figure["data"][i]["marker"]["line"]["width"] = w
-                
+        
+        
     return figure
 
 # --------------------------------------
@@ -361,9 +372,11 @@ def update_table_target(click_data, figure, selected_data):
     if selected_data is None: selected_data = {"selected":[]}
     selected_ids = selected_data["selected"]
         
-    if click_data is None: return empty_variant_table()
-
-    idx = click_data["points"][0]["curveNumber"]
+    if click_data is not None: 
+        idx = click_data["points"][0]["curveNumber"]
+    else:
+        idx = DEFAULT_IDX
+        
     trace = figure["data"][idx]
     target_group=trace["text"]
     
@@ -402,6 +415,7 @@ def update_table_target(click_data, figure, selected_data):
 
 
 TABLE = dbc.Container([
+    html.Pre(id="selection-text"),
     html.Div(id="variant-table-container",
              children=[empty_variant_table()])], 
     style={"width": "48vw"})
@@ -424,12 +438,14 @@ def make_cftr_component_plot(click_data, figure):
     
     COLLAPSE_PC=0.025
 
-    if click_data is None: return empty_component_plot()
-
-    idx = click_data["points"][0]["curveNumber"]
+    if click_data is not None: 
+        idx = click_data["points"][0]["curveNumber"]
+    else:
+        idx = DEFAULT_IDX
+        
     trace = figure["data"][idx]
     target_group=trace["text"]
-    
+
     if "exon" in target_group:
         vdf = variant_data[variant_data["group"].str.contains("exon")]
     else:
@@ -522,14 +538,13 @@ def make_cftr_component_plot(click_data, figure):
 
     fig.update_layout(plot_bgcolor="#F6F6F6",
             margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            height=400)
+            height=500)
     fig.update_xaxes(fixedrange=True, title_text="GRCh38 Coordinate")
     fig.update_yaxes(fixedrange=True, visible=False)
     return dcc.Graph(figure=fig, id="component-plot")
 
 
 COMPONENT_PLOT = dbc.Container([
-        html.Pre(id="selection-text"),
         html.Div(id="component-plot-container", 
                  children=[empty_component_plot()])
         ], style={"width": "48vw"})
@@ -573,21 +588,31 @@ def add_selected_variant(selected_data):
     if selected_ids is None or len(selected_ids) == 0: return empty_variant_table_selection()
     vdf = variant_data[variant_data["id"].isin(selected_ids)]
     
+    vdf["symbol"] = [EMPTY_SYMBOL for _ in selected_ids]
+
+    dropdown={"symbol": { "options": [ {"label": EMPTY_SYMBOL, "value": EMPTY_SYMBOL} ] + [
+                         {"label": m, "value": m} for m in SYMBOL ] } }
+    
     selection_table = dash_table.DataTable(
         data=vdf.to_dict("records"),
         id="variant-table-selection",
-        columns=TABLE_COLUMNS,
+        columns=TABLE_COLUMNS + [{"id": "symbol", "name": "symbol", "presentation": "dropdown"}],
         editable=True,
         row_deletable=True,
+        dropdown=dropdown,
         page_size=50,
-        fixed_rows={'headers': True},
         style_table={'height': 400})
 
     return selection_table
 
-TABLE_SELECTION = dbc.Container(
-    id="variant-table-selection-container",
-    children=[ empty_variant_table_selection() ])
+@app.callback(
+    Output("variant-table-selection", "data"),
+    Input("variant-table-selection", "data"))
+def update_table_dropdown(selection_table_data):
+    if selection_table_data is None: return dash.no_update
+    for x in selection_table_data:
+        if x["symbol"] is None: x["symbol"] = EMPTY_SYMBOL
+    return selection_table_data
 
 @app.callback(
     Output("selected-variants", "data"),
@@ -595,15 +620,27 @@ TABLE_SELECTION = dbc.Container(
     Input("variant-table", "data"),
     Input("variant-table-selection", "data"),
     Input("component-plot", "clickData"),
+    Input("predefined-dropdown", "value"),
     State("selected-variants", "data"))
 def variant_row_change(selected_ids, table_data, selection_table_data, 
-                       variant_plot_click, store_data):
+                       variant_plot_click, predefined_dropdown_value, store_data):
         
     store_data = store_data or {"selected": []}
     selected = [id for id in store_data["selected"]]
     to_rm = set()
 
     ctx = dash.callback_context
+
+    # handle predefined dropdown selection
+    if ctx.triggered and "predefined-dropdown" in ctx.triggered[0]["prop_id"]:
+        print("Loading predefined: " + str(predefined_dropdown_value))
+            
+        if predefined_dropdown_value == PREDEFINED0:
+            return dash.no_update            
+        if predefined_dropdown_value == PREDEFINED1:
+            store_data = {"selected": [172, 173, 174, 175, 178, 183]}
+            
+        return store_data
 
     # handle variant clicked on component plot
     if ctx.triggered and "component-plot" in ctx.triggered[0]["prop_id"]:
@@ -634,7 +671,6 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
             if id in table_ids and id not in selected_ids:
                 to_rm.add(id)
 
-
     for id in to_rm: 
         selected.remove(id)
 
@@ -645,19 +681,116 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
     store_data["selected"] = selected
     return store_data
 
+TABLE_SELECTION = dbc.Container(
+    id="variant-table-selection-container",
+    children=[ empty_variant_table_selection() ])
 
+PREDEFINED0="Select Predefined Variants"
+PREDEFINED1="Predefined 1"
+PREDEFINED2="Predefined 2"
+PREDEFINED3="Predefined 3"
+
+PREDEFINED_SELECTIONS = html.Div([
+    dcc.Dropdown([PREDEFINED0, PREDEFINED1, PREDEFINED2, PREDEFINED3], PREDEFINED0, id="predefined-dropdown"),
+    html.Div(id="predefined-dropdown-container")
+])
 
 # --------------------------------------
 # GRAPH PLOT
 # --------------------------------------
-    
+
 @app.callback(
     Output("graph-plot-container", "children"), 
     Input("selected-variants", "data"))
 def graph_replot(store_data):
     records = [vcf_records[i] for i in store_data["selected"]]
     plot = graph_component.plot_graph(records)
-    return [plot]
+    return [dcc.Graph(figure=plot, id="graph-plot")]
+
+@app.callback(
+    Output("graph-plot", "figure"),
+    Input("variant-table-selection", "data"),
+    Input("haplotype-table", "selected_rows"),
+    State("haplotype-table", "data"),
+    State("graph-plot", "figure"),
+    State("selected-variants", "data"))
+def update_graph_figure(selection_data, haplotype_selection, haplotype_data, figure, store_data):
+    
+    ctx = dash.callback_context
+
+    if ctx.triggered and "variant-table-selection" in ctx.triggered[0]["prop_id"]:
+        symbols = [d["symbol"] for d in selection_data] 
+        figure = graph_component.update_symbols(figure, symbols)
+    
+    if ctx.triggered and "haplotype-table" in ctx.triggered[0]["prop_id"]:
+
+        if haplotype_selection is None: return dash.no_update
+        if haplotype_selection[0] is None: return dash.no_update
+        
+        target_variants = dict()
+        target = haplotype_data[haplotype_selection[0]]
+        print(target)
+        for i,row in enumerate(selection_data):
+            if row["symbol"] in target:
+                target_variants[i] = target[row["symbol"]]
+        
+        haplotypes = graph_component.get_haps(figure)
+        haplogroup = []
+        for haplotype in haplotypes:
+            
+            check = [ target_variants[vid] != haplotype[vid] for vid in target_variants ]
+            if sum(check) == 0:
+                haplogroup.append(haplotype)
+                
+        print(haplogroup)
+
+        figure = graph_component.draw_haplotype(figure, haplogroup)
+    return figure 
+
+@app.callback(
+    Output("haplotype-container", "children"),
+    Input("variant-table-selection", "data"),
+    State("graph-plot", "figure"))
+def update_haplotype_table(selection_data, figure):
+    haplotypes = graph_component.get_haps(figure)
+    
+    selection = [i for i,s in enumerate(selection_data) if s["symbol"] != EMPTY_SYMBOL]
+    symbol = [s["symbol"] for s in selection_data if s["symbol"] != EMPTY_SYMBOL]
+
+    groups = dict()
+    for i,haplotype in enumerate(haplotypes):
+        group = tuple(haplotype[s] for s in selection)
+        if not group in groups: groups[group] = []
+        groups[group].append(i)
+    
+    def fake_rsid():
+        return "rs"+ str(round(random.random()*1e6))
+    rsids= [ fake_rsid() for s in selection ]
+    
+    total = sum([len(groups[g]) for g in groups])
+    rows = []
+    for group in groups:
+        size = len(groups[group])
+        r = {"freq" : str(round(size*100/total, 2)) + "%" }
+        for i,gt in enumerate(group): r[symbol[i]] = gt
+        rows.append(r)
+
+    tooltip = { SYMBOL[i]: {"value": rsid, "use_with": "both"} for i,rsid in enumerate(rsids) }
+    #columns=[ {"name": i, "id": i, "selectable": False} for i in range(len(rows))]
+
+    df = pd.DataFrame(dict( 
+        [("freq", [row["freq"] for row in rows])] + \
+        [(s, [row[s] for row in rows]) for s in symbol]
+    ))
+    return dash_table.DataTable(df.to_dict("records"), id="haplotype-table",
+                                row_selectable="single",
+                                tooltip=tooltip,
+                                tooltip_delay=0)
+
+HAPLOTYPE_TABLE = dbc.Container(
+        id="haplotype-container",
+        children=[get_empty_div("haplotype-table")],
+        style={"width": "20vw"})
 
 GRAPH_PLOT = dbc.Container(
         id="graph-plot-container",
@@ -665,17 +798,15 @@ GRAPH_PLOT = dbc.Container(
         style={"width": "80vw"})
 
 
-
 # --------------------------------------
 # APP LAYOUT
 # --------------------------------------
-
 
 cardstyle={"box-shadow": "0 4px 8px 0 rgba(0,0,0,0.2)"}   
 
 app.layout = html.Div(style={"padding": 20}, children=[
     dcc.Store(id="selected-variants", storage_type="memory"),
-    HEADER,
+    HEADER, PREDEFINED_SELECTIONS,
     html.Hr(),
     dbc.Card(
         children = [ dbc.CardHeader([ html.H5("CFTR Plot") ]),
@@ -698,13 +829,11 @@ app.layout = html.Div(style={"padding": 20}, children=[
     html.Br(),
     dbc.Card(
         children=[dbc.CardHeader([ html.H5("Haplotype Graph") ]),
-                  dbc.CardBody(children=[ GRAPH_PLOT ])],
+                  dbc.CardBody(children=[ GRAPH_PLOT, HAPLOTYPE_TABLE])],
         style=cardstyle,
         id="graph-card"),
 
     ])
-
-
 
 
 
@@ -757,59 +886,5 @@ def get_continuous_color(colorscale, intermed):
         colortype="rgb",
     )
 
-CLIENTSIDE_UPDATE= \
-    """
-    function(hover_data, figure) {
-        var triggered = dash_clientside.callback_context.triggered;
-        // update edge color with selected_ids haplotype
-
-        
-        if (typeof hover_data == "undefined"){
-            return figure;
-        } else{
-            var idx = hover_data["points"][0]["x"]
-        }
-
-        if ("hover_id" in figure["data"][0]){
-            if (figure["data"][0]["hover_id"] == idx){
-                return figure;
-            }
-        }
-        figure["data"][0]["hover_id"] = idx;    
-        for (let i = 0; i < figure["data"].length; i++) {
-            if ("customdata" in figure["data"][i]){
-                var trace = figure["data"][i]["customdata"][0];
-                var x = figure["data"][i]["x"];
-                var init_y = figure["data"][i]["customdata"][1];
-                var spread_y = figure["data"][i]["customdata"][2];
-                
-                if (trace == "node" || trace == "edge" || trace == "haplotype"){
-                    var update_y = [];
-                    for (let j = 0; j < x.length; j++) {
-                        update_y[j] = init_y[j]
-                        if (x[j] == idx){
-                            update_y[j] = spread_y[j];
-                        }
-                    }
-                    figure["data"][i]["y"] = update_y;
-                }
-            }
-        }
-        
-        return {
-            "data": figure["data"],
-            "layout": figure["layout"],
-            "frames": [{ "duration": 0, redraw: false }]
-        }
-    }
-    """
-
-
-app.clientside_callback(
-    CLIENTSIDE_UPDATE,
-    Output("graph-plot", "figure"), 
-    Input("graph-plot", "hoverData"),
-    State("graph-plot", "figure")
-)
 if __name__ == '__main__':
     app.run_server(debug=True)

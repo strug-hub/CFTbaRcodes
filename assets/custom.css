@@ -10,3 +10,7 @@
 body {
     font-family: "LouisCafe";
 }
+
+.Select-menu-outer {
+    display : block !important;
+}

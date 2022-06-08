@@ -1,4 +1,4 @@
-from dash import dcc, dash_table
+from dash import dcc
 from plotly import graph_objs as go
 import vcf
 import textile_plot as textile
@@ -7,7 +7,6 @@ import cvxpy as cp
 import random
 from pairing import pair
 import json
-from dash.dependencies import Input, Output, State
 from cryptography.fernet import Fernet
 
 KEY = Fernet.generate_key()
@@ -252,7 +251,7 @@ def plot_graph(vcf_records=None):
             y=[y_min - yspan*0.15 for x,variant in enumerate(variants)],
             text=[EMPTY_SYMBOL for x,variant in enumerate(variants)],
             mode="text",
-            hoverinfo="name",
+            hoverinfo="none",
             showlegend=False,
             customdata=[ "label" ] 
             )
@@ -278,7 +277,7 @@ def plot_graph(vcf_records=None):
                 textangle=90
                 )
 
-    return dcc.Graph(figure=fig, id="graph-plot")
+    return fig
 
 def flatten(t):
     return [item for sublist in t for item in sublist]

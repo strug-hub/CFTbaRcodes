@@ -89,7 +89,7 @@ def _textile_transform_with_missing(Xj, wj, qj, eigen_choice=1, zscale=0):
     
     A=(np.dot(A12.transpose(), A11inv).dot(A12) - A22)
     
-    eigenvectors, eigenvalues, _ = scipy.linalg.lapack.dsygv(A, B, uplo="U")
+    eigenvalues, eigenvectors, _ = scipy.linalg.lapack.dsygv(A, B, uplo="U")
     # in ascending order, last col has biggest eigenvalue
     beta = eigenvectors[:,-eigen_choice]
 
@@ -108,7 +108,7 @@ def _textile_transform_no_missing(Xj, qj, eigen_choice=1, a0=0):
     p=len(Xj) ; n=len(Xj[0])
     
     X = _flatten_list(Xj)
-    
+
     XTX = X.transpose().dot(X)
     ones = np.ones(n).reshape(n, 1)
     XT11TX = X.transpose().dot(ones).dot(ones.transpose()).dot(X)
@@ -125,8 +125,10 @@ def _textile_transform_no_missing(Xj, qj, eigen_choice=1, a0=0):
             B[j,k] = B_full[j,k] ; B[k,j] = B_full[k,j]
             j+=1
         
-    eigenvectors, eigenvalues, _ = scipy.linalg.lapack.dsygv(A, B, uplo="U")    
+    eigenvalues, eigenvectors, _ = scipy.linalg.lapack.dsygv(A, B, uplo="U")
     # in ascending order, last col has biggest eigenvalue
+    
+    print(eigenvectors)
     beta = eigenvectors[:,-eigen_choice]
     
     alpha = np.zeros(len(Xj))

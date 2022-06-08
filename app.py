@@ -357,7 +357,7 @@ TABLE_COLUMNS = [
     ]
 
 def empty_variant_table():
-    empty_div = get_empty_div("variant-table-empty", text="No variants to display", height="500px")
+    empty_div = get_empty_div("variant-table-empty", text="No variants to display", height="250px")
     empty_div.children.append(dash_table.DataTable(id="variant-table"))
     return empty_div
 
@@ -401,7 +401,7 @@ def update_table_target(click_data, figure, selected_data):
         selected_rows=selected_rows,
         page_size=50,
         fixed_rows={'headers': True},
-        style_table={'height': 400}
+        style_table={'height': 250}
         )
     
     condition = []
@@ -426,7 +426,7 @@ TABLE = dbc.Container([
 # --------------------------------------
 
 def empty_component_plot():
-    empty_div = get_empty_div("component-plot-empty", text="No variants to display", height="400px")
+    empty_div = get_empty_div("component-plot-empty", text="No variants to display", height="300px")
     empty_div.children.append(dcc.Graph(id="component-plot", style={"display": "none"}))
     return empty_div
 
@@ -525,7 +525,7 @@ def make_cftr_component_plot(click_data, figure):
                 marker_line_color=LINE_COL, marker_color=get_color(colorscale, r["af"]),
                 marker_line_width=0.5, marker_size=8, customdata=[r["id"]],
                 showlegend=False, text=[r["rsid"]], hoverinfo = "text"))
-            y+=0.05
+            y+=0.08
 
     
     xmin = min(annotation_data[annotation_data["id"] == target_group]["start"])
@@ -538,7 +538,7 @@ def make_cftr_component_plot(click_data, figure):
 
     fig.update_layout(plot_bgcolor="#F6F6F6",
             margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            height=500)
+            height=300)
     fig.update_xaxes(fixedrange=True, title_text="GRCh38 Coordinate")
     fig.update_yaxes(fixedrange=True, visible=False)
     return dcc.Graph(figure=fig, id="component-plot")
@@ -573,7 +573,7 @@ def update_component_selection(selected_data, figure):
 # VARIANT SELECTION
 # --------------------------------------
 def empty_variant_table_selection():
-    empty_div = get_empty_div("variant-table-selection-empty", text="No variants to display", height="400px")
+    empty_div = get_empty_div("variant-table-selection-empty", text="No variants to display", height="250px")
     empty_div.children.append(dash_table.DataTable(id="variant-table-selection"))
     return empty_div
 
@@ -601,9 +601,11 @@ def add_selected_variant(selected_data):
         row_deletable=True,
         dropdown=dropdown,
         page_size=50,
-        style_table={'height': 400})
+        fixed_rows={'headers': True},
+        style_table={'height': 250})
 
     return selection_table
+
 
 @app.callback(
     Output("variant-table-selection", "data"),
@@ -705,7 +707,7 @@ PREDEFINED_SELECTIONS = html.Div([
 def graph_replot(store_data):
     records = [vcf_records[i] for i in store_data["selected"]]
     plot = graph_component.plot_graph(records)
-    return [dcc.Graph(figure=plot, id="graph-plot")]
+    return [dcc.Graph(figure=plot, id="graph-plot", style={'width': '100%'})]
 
 @app.callback(
     Output("graph-plot", "figure"),
@@ -741,8 +743,6 @@ def update_graph_figure(selection_data, haplotype_selection, haplotype_data, fig
             check = [ target_variants[vid] != haplotype[vid] for vid in target_variants ]
             if sum(check) == 0:
                 haplogroup.append(haplotype)
-                
-        print(haplogroup)
 
         figure = graph_component.draw_haplotype(figure, haplogroup)
     return figure 
@@ -771,31 +771,41 @@ def update_haplotype_table(selection_data, figure):
     rows = []
     for group in groups:
         size = len(groups[group])
-        r = {"freq" : str(round(size*100/total, 2)) + "%" }
+        r = {"freq" : str(round(size*100/total, 2)) + "%" , "n" : size }
         for i,gt in enumerate(group): r[symbol[i]] = gt
         rows.append(r)
 
     tooltip = { SYMBOL[i]: {"value": rsid, "use_with": "both"} for i,rsid in enumerate(rsids) }
     #columns=[ {"name": i, "id": i, "selectable": False} for i in range(len(rows))]
-
+    n="#Haps"
     df = pd.DataFrame(dict( 
-        [("freq", [row["freq"] for row in rows])] + \
+        [(n, [row["n"] for row in rows])] + \
+        [("Frequency", [row["freq"] for row in rows])] + \
         [(s, [row[s] for row in rows]) for s in symbol]
+
     ))
-    return dash_table.DataTable(df.to_dict("records"), id="haplotype-table",
+    
+    df.sort_values(by=[n], ascending=False, inplace=True)
+    before_len = len(df)
+    df = df[df[n] > 3]
+    after_len = len(df)
+
+    return [dash_table.DataTable(df.to_dict("records"), id="haplotype-table",
                                 row_selectable="single",
                                 tooltip=tooltip,
-                                tooltip_delay=0)
+                                tooltip_delay=0),
+            html.Div(str(before_len-after_len)+" rare haplotypes hidden")
+            ]
 
 HAPLOTYPE_TABLE = dbc.Container(
         id="haplotype-container",
-        children=[get_empty_div("haplotype-table")],
-        style={"width": "20vw"})
+        children=[get_empty_div("haplotype-table", height=250)],
+        style={"width": "30vw"})
 
 GRAPH_PLOT = dbc.Container(
         id="graph-plot-container",
         children=[],
-        style={"width": "80vw"})
+        style={"max-width": "100%"})
 
 
 # --------------------------------------
@@ -823,18 +833,18 @@ app.layout = html.Div(style={"padding": 20}, children=[
     html.Br(),
     dbc.Card(
         children=[dbc.CardHeader([ html.H5("Selected Variants") ]),
-                  dbc.CardBody(children=[ TABLE_SELECTION ])],
+                  dbc.CardBody(html.Div(style={"display": "flex", "align-content":"stretch"},
+                                        children=[ TABLE_SELECTION, HAPLOTYPE_TABLE ]))],
         style=cardstyle,
         id="selected-card"),
     html.Br(),
     dbc.Card(
         children=[dbc.CardHeader([ html.H5("Haplotype Graph") ]),
-                  dbc.CardBody(children=[ GRAPH_PLOT, HAPLOTYPE_TABLE])],
+                  dbc.CardBody(children=[ GRAPH_PLOT ])],
         style=cardstyle,
         id="graph-card"),
 
     ])
-
 
 
 # Interpolating from a plotly color scale

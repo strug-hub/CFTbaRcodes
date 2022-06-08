@@ -1,4 +1,3 @@
-from dash import dcc
 from plotly import graph_objs as go
 import vcf
 import textile_plot as textile
@@ -26,7 +25,7 @@ def get_haps(figure):
 
 EDGE_COLOR="rgba(0,0,0,0.5)"
 EDGE_COLOR_HIGHLIGHT="rgba(255,0,0,0.7)"
-EDGE_SCALE_FACTOR=10
+EDGE_SCALE_FACTOR=12
 
 MISSING_TO_REF=True
 VARIANT_INDEL="INDEL"
@@ -48,6 +47,7 @@ class Node:
         self.variant = variant
         self.gt = gt
         self.seq = seq
+        self.label = seq if len(seq) <3 else "*"
         self.x = None
         self.y = None
         self.shape = "circle" ; self.color = "blue"
@@ -59,7 +59,7 @@ class Node:
     def id(self):
         return( pair(self.variant.id, self.gt) )
     def to_json(self):
-        serialized = dict(gt=self.gt, seq=self.seq,
+        serialized = dict(gt=self.gt, seq=self.seq, label=self.label,
                          x=self.x, y=self.y,
                          shape=self.shape, color=self.color)
         return json.dumps(serialized)
@@ -305,7 +305,7 @@ def get_node_traces(nodes):
                     marker=dict(
                         color=[node.color for node in node_bins[i]],
                         symbol=[node.shape for node in node_bins[i]],
-                        size=20, line=dict(color="#888888", width=2)),
+                        size=25, line=dict(color="#888888", width=2)),
                     customdata=[ "node", [node.gt for node in node_bins[i]] ] 
                     )
                 )
@@ -426,7 +426,7 @@ def draw_haplotype(figure, haplogroup):
                     trace = {"customdata": ["haplogroup"], 
                              "hoverinfo": "none", 
                              "line": {"color": EDGE_COLOR_HIGHLIGHT,
-                                      "width": proportion*EDGE_SCALE_FACTOR*1.2},
+                                      "width": max(proportion*EDGE_SCALE_FACTOR, 4)},
                              "mode": "lines", 
                              "showlegend": False, 
                              "x": [x for x in edge_x], 
@@ -449,7 +449,7 @@ def draw_haplotype(figure, haplogroup):
                              "hoverinfo": "text", 
                              "marker": {"color": EDGE_COLOR_HIGHLIGHT,
                                         "symbol": "circle",
-                                        "size": 22 + 10*proportion},
+                                        "size": 33 + 10*proportion},
                              "text": str(round(proportion*100,1)) + "%",
                              "showlegend": False, 
                              "x": [x], 

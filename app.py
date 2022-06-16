@@ -21,7 +21,7 @@ external_stylesheets = ['https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/
 CFTR_START=117479025 ; CFTR_END=117669665 ; FLANK=10000
 CFTR_VIEW="chr7:" + str(CFTR_START-FLANK) + "-" + str(CFTR_END+FLANK)
 
-VCF="quick_cftr_merge_chr7_117287120-117715971.vcf"
+VCF="vcf/quick_cftr_merge_chr7_117287120-117715971.vcf"
 vcf_reader = vcf.Reader(filename=VCF)
 vcf_records = [record for record in vcf_reader if record.num_called > 10]
 

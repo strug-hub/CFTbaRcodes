@@ -21,7 +21,7 @@ external_stylesheets = ['https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/
 CFTR_START=117479025 ; CFTR_END=117669665 ; FLANK=10000
 CFTR_VIEW="chr7:" + str(CFTR_START-FLANK) + "-" + str(CFTR_END+FLANK)
 
-VCF="vcf/quick_cftr_merge_chr7_117287120-117715971.vcf"
+VCF="data/quick_cftr_merge_chr7_117287120-117715971.vcf"
 vcf_reader = vcf.Reader(filename=VCF)
 vcf_records = [record for record in vcf_reader if record.num_called > 10]
 
@@ -43,7 +43,7 @@ DEFAULT_IDX=2
 # READ ANNOTATION DATA
 # --------------------------------------
 
-annotation_data = pd.read_csv("cftr_exons.txt", sep="\t")
+annotation_data = pd.read_csv("data/cftr_exons.txt", sep="\t")
 
 INTRON_SCALE=100
 atype=[] ; x0=[] ; x1=[]

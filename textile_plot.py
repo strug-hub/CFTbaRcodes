@@ -128,7 +128,6 @@ def _textile_transform_no_missing(Xj, qj, eigen_choice=1, a0=0):
     eigenvalues, eigenvectors, _ = scipy.linalg.lapack.dsygv(A, B, uplo="U")
     # in ascending order, last col has biggest eigenvalue
     
-    print(eigenvectors)
     beta = eigenvectors[:,-eigen_choice]
     
     alpha = np.zeros(len(Xj))

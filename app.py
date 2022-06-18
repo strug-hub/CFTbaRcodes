@@ -10,6 +10,9 @@ import plotly.colors
 from PIL import ImageColor
 import graph_component
 
+pd.options.mode.chained_assignment = None  # default='warn'
+
+
 SYMBOL=["🟥","🟧","🟨","🟩","🟦","🟪","🟫","⬛",
         "❌","⭕","❗","❓",
         "♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","⛎"]
@@ -21,10 +24,11 @@ external_stylesheets = ['https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/
 CFTR_START=117479025 ; CFTR_END=117669665 ; FLANK=10000
 CFTR_VIEW="chr7:" + str(CFTR_START-FLANK) + "-" + str(CFTR_END+FLANK)
 
-VCF="data/quick_cftr_merge_chr7_117287120-117715971.vcf"
+VCF="data/cftr.annotated.final.vcf.gz"
+#VCF="data/cftr.small.vcf"
+
 vcf_reader = vcf.Reader(filename=VCF)
 vcf_records = [record for record in vcf_reader if record.num_called > 10]
-
 
 LOGO = "assets/logo.svg"
 
@@ -100,9 +104,9 @@ def relative_positon(pos):
 
 def get_group(pos):
     if pos < min(annotation_data["start"]):
-        return("5' Flanking")
+        return("5’ Flanking")
     if pos > max(annotation_data["end"]):
-        return("3' Flanking")
+        return("3’ Flanking")
     for i, r in annotation_data.iterrows():
         if pos >= r["start"] and pos <= r["end"]: # in exon
             return r["id"]
@@ -120,21 +124,26 @@ def get_variant_type(record):
     elif record.is_indel: return VARIANT_INS
     return VARIANT_ETC    
 
+af_cut = 5/len(vcf_records[0].samples)
+
+vcf_records = [record for record in vcf_records if record.ID != None ]
+
 variant_dict = {
     "id": [i for i in range(len(vcf_records))],
     "CHROM": [v.CHROM for v in vcf_records],
     "POS": [v.POS for v in vcf_records],
     "REF": [v.REF for v in vcf_records],
-    "ALT": [v.POS for v in vcf_records],
+    "ALT": [v.ALT for v in vcf_records],
     "x": [relative_positon(v.POS) for v in vcf_records],
     "y": [1 for v in vcf_records],
-    "rsid": [fake_rsid() for v in vcf_records],
+    "rsid": [v.ID for v in vcf_records],
     "type": [get_variant_type(v) for v in vcf_records],
-    "af": [random.random()/2 for v in vcf_records],
+    "af": [[af for af in v.aaf] for v in vcf_records],
     "called": [v.num_called for v in vcf_records],
     "nsamp": [len(v.samples) for v in vcf_records],
     "group":[get_group(v.POS) for v in vcf_records]
     }
+
 variant_data = pd.DataFrame(data=variant_dict)
 
 # --------------------------------------
@@ -294,6 +303,8 @@ def update_selection_text(click_data, figure):
     if "exon" in text: 
         text="all exons"
         color=EXON_COL
+    elif "UTR" in text:
+        text = text + " + flanking"
     elif "intron" in text:
         color=INTRON_COL
     
@@ -345,17 +356,6 @@ def update_cftr_plot_selection(click_data, figure):
 # VARIANT TABLE
 # --------------------------------------
 
-TABLE_COLUMNS = [
-    { "id": "rsid", "name": "rsid" },
-    { "id": "CHROM", "name": "chrom" },
-    { "id": "POS", "name": "pos" },
-    { "id": "REF", "name": "ref" },
-    { "id": "ALT", "name": "alt" },
-    { "id": "type", "name": "type"},
-    { "id": "af", "name": "allele freq"},
-    { "id": "group", "name": "location"}
-    ]
-
 def empty_variant_table():
     empty_div = get_empty_div("variant-table-empty", text="No variants to display", height="250px")
     empty_div.children.append(dash_table.DataTable(id="variant-table"))
@@ -382,6 +382,10 @@ def update_table_target(click_data, figure, selected_data):
     
     if "exon" in target_group:
         vdf = variant_data[variant_data["group"].str.contains("exon")]
+    elif "5’" in target_group:
+        vdf = variant_data[variant_data["group"].str.contains("5’")]
+    elif "3’" in target_group:
+        vdf = variant_data[variant_data["group"].str.contains("3’")]
     else:
         vdf = variant_data[variant_data["group"] == target_group]
     
@@ -392,14 +396,43 @@ def update_table_target(click_data, figure, selected_data):
     for _, r in vdf.iterrows():
         if r["id"] in selected_ids : selected_rows.append(i)
         i+=1
+    vdf["pos"] = vdf["POS"].astype(str)
+    vdf["coordinate"] = vdf[["CHROM", "pos"]].apply(":".join, axis=1)
+    
+    vdf["af"] = [", ".join([str(round(x*100,1))+"%" for x in af]) for af in vdf["af"]]
+    vdf["ALT"] = [", ".join([str(x) for x in alt]) for alt in vdf["ALT"]]
+
+    table_columns = [
+    { "id": "rsid", "name": "ID" },
+    { "id": "coordinate", "name": "Coordinate" },
+    { "id": "group", "name": "Location"},
+    { "id": "type", "name": "Type"},
+    { "id": "REF", "name": "REF" },
+    { "id": "ALT", "name": "ALT" },
+    { "id": "af", "name": "Frequency"}
+    ]
+    
+    tooltips=[]
+    for ref,alt,af in zip(vdf["REF"],vdf["ALT"], vdf["af"]):
+        tooltips.append({"REF": {"value": "REF: "+str(ref), 'type': 'markdown'},
+                         "ALT": {"value": "ALT: "+str(alt), 'type': 'markdown'},
+                         "af": {"value": "Allele Frequencies: "+str(af), 'type': 'markdown'}})
+
+
+    vdf["REF"] = [x[:10]+"..." if len(x) > 10 else x for x in vdf["REF"]]
+    vdf["ALT"] = [x[:10]+"..." if len(x) > 10 else x for x in vdf["ALT"]]
+    vdf["af"] = [x[:10]+"..." if len(x) > 10 else x for x in vdf["af"]]
 
     variant_table = dash_table.DataTable(
         data=vdf.to_dict("records"),
         id="variant-table",
-        columns=TABLE_COLUMNS,
+        columns=table_columns,
         row_selectable='multi',
         selected_rows=selected_rows,
         page_size=50,
+        tooltip_data=tooltips,
+        tooltip_delay=0,
+        style_cell={'textAlign': 'left'},
         fixed_rows={'headers': True},
         style_table={'height': 250}
         )
@@ -448,6 +481,10 @@ def make_cftr_component_plot(click_data, figure):
 
     if "exon" in target_group:
         vdf = variant_data[variant_data["group"].str.contains("exon")]
+    elif "5’" in target_group:
+        vdf = variant_data[variant_data["group"].str.contains("5’")]
+    elif "3’" in target_group:
+        vdf = variant_data[variant_data["group"].str.contains("3’")]
     else:
         vdf = variant_data[variant_data["group"] == target_group]
 
@@ -533,6 +570,11 @@ def make_cftr_component_plot(click_data, figure):
     if "exon" in target_group:
         xmin=min(annotation_data["start"])
         xmax=max(annotation_data["end"])
+    elif "5’" in target_group:
+        xmin=vcf_records[0].POS
+    elif "3’" in target_group:
+        xmax=vcf_records[-1].POS
+        
     fig.update_yaxes(range=[0, 2])
     fig.update_xaxes(range=[xmin-(xmax-xmin)*0.05, xmax+(xmax-xmin)*0.05 ])
 
@@ -579,8 +621,14 @@ def empty_variant_table_selection():
 
 @app.callback(
     Output("variant-table-selection-container", "children"),
-    Input("selected-variants", "data"))
-def add_selected_variant(selected_data):
+    Input("selected-variants", "data"),
+    State("variant-table-selection-container", "children"))
+def add_selected_variant(selected_data, table_self):
+    
+    saved_symbols = dict()
+    if "props" in table_self and "data" in table_self["props"]:
+        for row in table_self["props"]["data"]:
+            saved_symbols[row["id"]] = row["symbol"]
     
     if selected_data is None: selected_data = {"selected":[]}
     selected_ids = selected_data["selected"]
@@ -588,18 +636,50 @@ def add_selected_variant(selected_data):
     if selected_ids is None or len(selected_ids) == 0: return empty_variant_table_selection()
     vdf = variant_data[variant_data["id"].isin(selected_ids)]
     
-    vdf["symbol"] = [EMPTY_SYMBOL for _ in selected_ids]
+    vdf["symbol"] = [(saved_symbols[id] if id in saved_symbols else EMPTY_SYMBOL) for id in selected_ids]
 
     dropdown={"symbol": { "options": [ {"label": EMPTY_SYMBOL, "value": EMPTY_SYMBOL} ] + [
                          {"label": m, "value": m} for m in SYMBOL ] } }
     
+    vdf["pos"] = vdf["POS"].astype(str)
+    vdf["coordinate"] = vdf[["CHROM", "pos"]].apply(":".join, axis=1)
+    
+    vdf["af"] = [", ".join([str(round(x*100,1))+"%" for x in af]) for af in vdf["af"]]
+    vdf["ALT"] = [", ".join([str(x) for x in alt]) for alt in vdf["ALT"]]
+
+    
+    table_columns = [
+    { "id": "rsid", "name": "ID" },
+    { "id": "coordinate", "name": "Coordinate" },
+    { "id": "group", "name": "Location"},
+    { "id": "type", "name": "Type"},
+    { "id": "REF", "name": "REF" },
+    { "id": "ALT", "name": "ALT" },
+    { "id": "af", "name": "Frequency"},
+    {"id": "symbol", "name": "Symbol", "presentation": "dropdown"}
+    ]
+    
+    tooltips=[]
+    for ref,alt,af in zip(vdf["REF"],vdf["ALT"], vdf["af"]):
+        tooltips.append({"REF": {"value": "REF: "+str(ref), 'type': 'markdown'},
+                         "ALT": {"value": "ALT: "+str(alt), 'type': 'markdown'},
+                         "af": {"value": "Allele Frequencies: "+str(af), 'type': 'markdown'}})
+
+
+    vdf["REF"] = [x[:10]+"..." if len(x) > 10 else x for x in vdf["REF"]]
+    vdf["ALT"] = [x[:10]+"..." if len(x) > 10 else x for x in vdf["ALT"]]
+    vdf["af"] = [x[:10]+"..." if len(x) > 10 else x for x in vdf["af"]]
+
+    
     selection_table = dash_table.DataTable(
         data=vdf.to_dict("records"),
         id="variant-table-selection",
-        columns=TABLE_COLUMNS + [{"id": "symbol", "name": "symbol", "presentation": "dropdown"}],
+        columns=table_columns,
         editable=True,
         row_deletable=True,
         dropdown=dropdown,
+        tooltip_data=tooltips,
+        tooltip_delay=0,
         page_size=50,
         fixed_rows={'headers': True},
         style_table={'height': 250})
@@ -641,11 +721,9 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
             return dash.no_update            
         if predefined_dropdown_value == PREDEFINED1:
             store_data = {"selected": [172, 173, 174, 175, 178, 183]}
-            
-        return store_data
-
+            return store_data
     # handle variant clicked on component plot
-    if ctx.triggered and "component-plot" in ctx.triggered[0]["prop_id"]:
+    elif ctx.triggered and "component-plot" in ctx.triggered[0]["prop_id"]:
         if variant_plot_click is not None:
             for clicked in variant_plot_click["points"]:
                 if "customdata" in clicked:
@@ -654,34 +732,33 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
                         selected.remove(clicked_id)
                     else:
                         selected.append(clicked_id)
-        store_data["selected"] = selected
-        return store_data
-
     
-    # handle variant removed from selection table
-    if selection_table_data is not None:
-        table_ids = [x["id"] for x in selection_table_data]
-        for id in selected:
-            if id not in table_ids: to_rm.add(id)
-
-    # handle variant [un]selected from variant table
-    if selected_ids is not None and table_data is not None:
-        table_ids = [x["id"] for x in table_data]
-        selected = store_data["selected"] + selected_ids
-        selected = list(set(selected))
-        for id in selected:
-            if id in table_ids and id not in selected_ids:
-                to_rm.add(id)
-
-    for id in to_rm: 
-        selected.remove(id)
-
+    else:
+        # handle variant removed from selection table
+        if selection_table_data is not None:
+            table_ids = [x["id"] for x in selection_table_data]
+            for id in selected:
+                if id not in table_ids: to_rm.add(id)
+    
+        # handle variant [un]selected from variant table
+        if selected_ids is not None and table_data is not None:
+            table_ids = [x["id"] for x in table_data]
+            selected = store_data["selected"] + selected_ids
+            selected = list(set(selected))
+            for id in selected:
+                if id in table_ids and id not in selected_ids:
+                    to_rm.add(id)
+    
+        for id in to_rm: 
+            selected.remove(id)
+    
+    
     if store_data["selected"] == selected:
         return dash.no_update
 
-    print("selected: ", selected)
-    store_data["selected"] = selected
-    return store_data
+    store_data["selected"] = sorted(selected)
+    print("selected: ", store_data["selected"])
+    return store_data 
 
 TABLE_SELECTION = dbc.Container(
     id="variant-table-selection-container",
@@ -703,11 +780,48 @@ PREDEFINED_SELECTIONS = html.Div([
 
 @app.callback(
     Output("graph-plot-container", "children"), 
-    Input("selected-variants", "data"))
-def graph_replot(store_data):
-    records = [vcf_records[i] for i in store_data["selected"]]
-    plot = graph_component.plot_graph(records)
-    return [dcc.Graph(figure=plot, id="graph-plot", style={'width': '100%'})]
+    Input("selected-variants", "data"),
+    Input("graph-plot-button", "n_clicks"),
+    State("variant-table-selection", "data"),
+    State("haplotype-table", "selected_rows"),
+    State("haplotype-table", "data"))
+def graph_replot(store_data, draw_button, selection_data, haplotype_selection, haplotype_data):
+    
+    ctx = dash.callback_context
+
+    if ctx.triggered and "graph-plot-button" in ctx.triggered[0]["prop_id"]:
+        records = [vcf_records[i] for i in store_data["selected"]]
+        figure = graph_component.plot_graph(records)
+    else:
+        figure = None
+    
+    if figure is None:
+        return [get_empty_div("graph-plot", height=350)]
+    
+    symbols = [d["symbol"] for d in selection_data] 
+    figure = graph_component.update_symbols(figure, symbols)
+
+    if haplotype_selection is not None and haplotype_selection[0] is not None:
+
+        target_variants = dict()
+        target = haplotype_data[haplotype_selection[0]]
+    
+        for i,row in enumerate(selection_data):
+            if row["symbol"] in target:
+                target_variants[i] = target[row["symbol"]]
+        
+        haplotypes = graph_component.get_haps(figure)
+        haplogroup = []
+        for haplotype in haplotypes:
+            
+            check = [ target_variants[vid] != haplotype[vid] for vid in target_variants ]
+            if sum(check) == 0:
+                haplogroup.append(haplotype)
+    
+        figure = graph_component.draw_haplotype(figure, haplogroup)
+
+    return [dcc.Graph(figure=figure, id="graph-plot", style={'width': '100%'})]
+
 
 @app.callback(
     Output("graph-plot", "figure"),
@@ -719,7 +833,9 @@ def graph_replot(store_data):
 def update_graph_figure(selection_data, haplotype_selection, haplotype_data, figure, store_data):
     
     ctx = dash.callback_context
-
+    if figure is None:
+        return dash.no_update
+        
     if ctx.triggered and "variant-table-selection" in ctx.triggered[0]["prop_id"]:
         symbols = [d["symbol"] for d in selection_data] 
         figure = graph_component.update_symbols(figure, symbols)
@@ -731,7 +847,7 @@ def update_graph_figure(selection_data, haplotype_selection, haplotype_data, fig
         
         target_variants = dict()
         target = haplotype_data[haplotype_selection[0]]
-        print(target)
+
         for i,row in enumerate(selection_data):
             if row["symbol"] in target:
                 target_variants[i] = target[row["symbol"]]
@@ -750,8 +866,18 @@ def update_graph_figure(selection_data, haplotype_selection, haplotype_data, fig
 @app.callback(
     Output("haplotype-container", "children"),
     Input("variant-table-selection", "data"),
-    State("graph-plot", "figure"))
-def update_haplotype_table(selection_data, figure):
+    Input("graph-plot", "figure"),
+    State("haplotype-container", "children"))
+def update_haplotype_table(selection_data, figure, table_self):
+    
+    ctx = dash.callback_context
+    if ctx.triggered and "graph-plot" in ctx.triggered[0]["prop_id"]:
+        if "props" in table_self and "data" in table_self["props"]:
+            return dash.no_update
+
+    if figure is None:
+        return get_empty_div("haplotype-table", height=250, text="Please redraw graph.")
+    
     haplotypes = graph_component.get_haps(figure)
     
     selection = [i for i,s in enumerate(selection_data) if s["symbol"] != EMPTY_SYMBOL]
@@ -763,27 +889,26 @@ def update_haplotype_table(selection_data, figure):
         if not group in groups: groups[group] = []
         groups[group].append(i)
     
-    def fake_rsid():
-        return "rs"+ str(round(random.random()*1e6))
-    rsids= [ fake_rsid() for s in selection ]
+    rsids= [ vcf_records[s].ID for s in selection ]
     
     total = sum([len(groups[g]) for g in groups])
     rows = []
     for group in groups:
         size = len(groups[group])
-        r = {"freq" : str(round(size*100/total, 2)) + "%" , "n" : size }
+        r = {"freq" : str(round(size*100/total, 1)) + "%" , "n" : size }
         for i,gt in enumerate(group): r[symbol[i]] = gt
         rows.append(r)
 
     tooltip = { SYMBOL[i]: {"value": rsid, "use_with": "both"} for i,rsid in enumerate(rsids) }
     #columns=[ {"name": i, "id": i, "selectable": False} for i in range(len(rows))]
-    n="#Haps"
+    n="# Haps"
     df = pd.DataFrame(dict( 
         [(n, [row["n"] for row in rows])] + \
         [("Frequency", [row["freq"] for row in rows])] + \
         [(s, [row[s] for row in rows]) for s in symbol]
 
     ))
+        
     
     df.sort_values(by=[n], ascending=False, inplace=True)
     before_len = len(df)
@@ -791,17 +916,22 @@ def update_haplotype_table(selection_data, figure):
     after_len = len(df)
 
     return [dash_table.DataTable(df.to_dict("records"), id="haplotype-table",
-                                row_selectable="single",
-                                tooltip=tooltip,
-                                tooltip_delay=0),
+                                row_selectable="single"),
             html.Div(str(before_len-after_len)+" rare haplotypes hidden")
             ]
+
+@app.callback(
+    Output("graph-plot-button", "disabled"),
+    Input("selected-variants", "data"))
+def update_table_target(selected_data):
+    return selected_data is None or len(selected_data["selected"]) < 2
 
 HAPLOTYPE_TABLE = dbc.Container(
         id="haplotype-container",
         children=[get_empty_div("haplotype-table", height=250)],
         style={"width": "30vw"})
 
+GRAPH_PLOT_BUTTON = html.Button('Redraw plot', id='graph-plot-button', n_clicks=0, disabled=True)
 GRAPH_PLOT = dbc.Container(
         id="graph-plot-container",
         children=[],
@@ -839,13 +969,12 @@ app.layout = html.Div(style={"padding": 20}, children=[
         id="selected-card"),
     html.Br(),
     dbc.Card(
-        children=[dbc.CardHeader([ html.H5("Haplotype Graph") ]),
-                  dbc.CardBody(children=[ GRAPH_PLOT ])],
+        children=[dbc.CardHeader([ html.H5("Haplotype Graph"), GRAPH_PLOT_BUTTON ], style={"display":"flex","column-gap":"20px"}),
+                  dbc.CardBody(children=[GRAPH_PLOT ])],
         style=cardstyle,
         id="graph-card"),
 
     ])
-
 
 # Interpolating from a plotly color scale
 
@@ -898,4 +1027,4 @@ def get_continuous_color(colorscale, intermed):
 
 if __name__ == '__main__':
     #app.run_server(debug=True)
-    app.run_server(port=8001)
+    app.run_server(debug=False, port=8001)

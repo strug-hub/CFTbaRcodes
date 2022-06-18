@@ -1,9 +1,7 @@
 from plotly import graph_objs as go
-import vcf
 import textile_plot as textile
 import numpy as np
 import cvxpy as cp
-import random
 from pairing import pair
 import json
 from cryptography.fernet import Fernet
@@ -23,8 +21,8 @@ def get_haps(figure):
             haps = [h.split(" ") for h in haps]
             return haps
 
-EDGE_COLOR="rgba(0,0,0,0.5)"
-EDGE_COLOR_HIGHLIGHT="rgba(255,0,0,0.7)"
+EDGE_COLOR="lightgrey"
+EDGE_COLOR_HIGHLIGHT="lightcoral"
 EDGE_SCALE_FACTOR=12
 
 MISSING_TO_REF=True
@@ -50,9 +48,9 @@ class Node:
         self.label = seq if len(seq) <3 else "*"
         self.x = None
         self.y = None
-        self.shape = "circle" ; self.color = "blue"
+        self.shape = "circle" ; self.color = "skyblue"
         if variant.get_class() == VARIANT_INDEL:
-            self.shape = "diamond" ; self.color = "orange"
+            self.shape = "diamond" ; self.color = "lightsalmon"
 
     def coords(self):
         return (self.x, self.y)
@@ -182,9 +180,10 @@ def optimize_spread(y, height_fraction=10):
 def plot_graph(vcf_records=None):
     
     if vcf_records is None or len(vcf_records) < 2:        
-        VCF="cftr.vcf.gz"
-        vcf_reader = vcf.Reader(filename=VCF)
-        vcf_records = [record for record in vcf_reader]
+        #VCF="cftr.vcf.gz"
+        #vcf_reader = vcf.Reader(filename=VCF)
+        #vcf_records = [record for record in vcf_reader]
+        return None
     
     # Create variant objects
     variants = [] ; nodes = []
@@ -196,7 +195,7 @@ def plot_graph(vcf_records=None):
     
     # Calculate textile heights
     height_dict = textile.genotype_textile(vcf_records, plot=False, haplotype=True, set_missing_to_ref=MISSING_TO_REF)
-    height_dict = optimize_spread(height_dict, 12)
+    height_dict = optimize_spread(height_dict, 10)
 
     for i,variant in enumerate(variants):
         variant.set_coordinates( height_dict[i] )        
@@ -237,9 +236,6 @@ def plot_graph(vcf_records=None):
     node_traces = get_node_traces(nodes)
     edge_traces = get_edge_traces(edges)
     
-    def fake_rsid():
-        return "rs"+ str(round(random.random()*1e6))
-
     y = [node.y for node in nodes]
     y_min, y_max = min(y), max(y)
     yspan = y_max - y_min
@@ -248,7 +244,7 @@ def plot_graph(vcf_records=None):
     label_traces =[
         go.Scatter(
             x=[x for x,variant in enumerate(variants)],
-            y=[y_min - yspan*0.15 for x,variant in enumerate(variants)],
+            y=[y_min - yspan*0.12 for x,variant in enumerate(variants)],
             text=[EMPTY_SYMBOL for x,variant in enumerate(variants)],
             mode="text",
             hoverinfo="none",
@@ -271,7 +267,7 @@ def plot_graph(vcf_records=None):
 
     for x,variant in enumerate(variants):
         fig.add_annotation(x=x, y=yann,
-                text=fake_rsid(), #variant.ID,
+                text=variant.record.ID,
                 showarrow=False,
                 align="left",
                 textangle=90
@@ -300,7 +296,7 @@ def get_node_traces(nodes):
                     text=[node.seq for node in node_bins[i]],
                     mode="markers+text",
                     hoverinfo="text",
-                    textfont_color="white",
+                    textfont_color="black",
                     showlegend=False,
                     marker=dict(
                         color=[node.color for node in node_bins[i]],

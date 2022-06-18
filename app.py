@@ -946,7 +946,7 @@ cardstyle={"box-shadow": "0 4px 8px 0 rgba(0,0,0,0.2)"}
 
 app.layout = html.Div(style={"padding": 20}, children=[
     dcc.Store(id="selected-variants", storage_type="memory"),
-    HEADER, PREDEFINED_SELECTIONS,
+    HEADER, #PREDEFINED_SELECTIONS,
     html.Hr(),
     dbc.Card(
         children = [ dbc.CardHeader([ html.H5("CFTR Plot") ]),

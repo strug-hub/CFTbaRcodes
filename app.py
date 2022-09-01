@@ -702,10 +702,9 @@ def update_table_dropdown(selection_table_data):
     Input("variant-table", "data"),
     Input("variant-table-selection", "data"),
     Input("component-plot", "clickData"),
-    Input("predefined-dropdown", "value"),
     State("selected-variants", "data"))
 def variant_row_change(selected_ids, table_data, selection_table_data, 
-                       variant_plot_click, predefined_dropdown_value, store_data):
+                       variant_plot_click, store_data):
         
     store_data = store_data or {"selected": []}
     selected = [id for id in store_data["selected"]]
@@ -713,17 +712,8 @@ def variant_row_change(selected_ids, table_data, selection_table_data,
 
     ctx = dash.callback_context
 
-    # handle predefined dropdown selection
-    if ctx.triggered and "predefined-dropdown" in ctx.triggered[0]["prop_id"]:
-        print("Loading predefined: " + str(predefined_dropdown_value))
-            
-        if predefined_dropdown_value == PREDEFINED0:
-            return dash.no_update            
-        if predefined_dropdown_value == PREDEFINED1:
-            store_data = {"selected": [172, 173, 174, 175, 178, 183]}
-            return store_data
     # handle variant clicked on component plot
-    elif ctx.triggered and "component-plot" in ctx.triggered[0]["prop_id"]:
+    if ctx.triggered and "component-plot" in ctx.triggered[0]["prop_id"]:
         if variant_plot_click is not None:
             for clicked in variant_plot_click["points"]:
                 if "customdata" in clicked:
@@ -1027,4 +1017,4 @@ def get_continuous_color(colorscale, intermed):
 
 if __name__ == '__main__':
     #app.run_server(debug=True)
-    app.run_server(debug=False, port=8001)
+    app.run_server(debug=True, port=8001)

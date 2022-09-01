@@ -1017,4 +1017,4 @@ def get_continuous_color(colorscale, intermed):
 
 if __name__ == '__main__':
     #app.run_server(debug=True)
-    app.run_server(debug=True, port=8001)
+    app.run_server(debug=False, port=8001)
